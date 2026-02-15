@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Line Drawing - Vehicle Tracking System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .canvas-container {
+            position: relative;
+            display: inline-block;
+            margin: 20px auto;
+            border: 2px solid #667eea;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        
+        #drawingCanvas {
+            cursor: crosshair;
+            display: block;
+        }
+        
+        .controls-panel {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 15px;
+            margin: 20px 0;
+            color: white;
+        }
+        
+        .leg-config {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: var(--text-primary);
+        }
+        
+        .line-mode {
+            display: inline-block;
+            padding: 10px 20px;
+            margin: 5px;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid white;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .line-mode:hover {
+            background: rgba(255,255,255,0.4);
+            transform: translateY(-2px);
+        }
+        
+        .line-mode.active {
+            background: white;
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .instruction-box {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 10px;
+            margin: 15px 0;
+            border-left: 4px solid var(--accent-primary);
+        }
+        
+        .color-indicator {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            margin: 0 5px;
+            vertical-align: middle;
+        }
+        
+        .results-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .result-card {
+            background: var(--bg-secondary);
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+            border-left: 4px solid var(--accent-primary);
+        }
+        
+        .download-buttons {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            justify-content: center;
+            margin: 20px 0;
+        }
+        
+        .download-buttons .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .download-buttons .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        
+        .download-buttons .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .download-buttons .btn-secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+            color: white;
+        }
+        
+        .download-buttons .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+        
+        .download-buttons .btn-info {
+            background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+            color: white;
+        }
+        
+        .download-buttons .btn-warning {
+            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);
+            color: white;
+        }
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+
+        /* Processing overlay & spinner */
+        .processing-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.45);
+            display: none; /* shown when processing */
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 6px solid rgba(255,255,255,0.15);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .btn.disabled, .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-draw-polygon"></i>
+                    <h1>Draw Counting Lines (Legs)</h1>
+                </div>
+
+                <nav class="nav-links">
+                    {% if session.role == 'admin' %}
+                        <a href="/admin/dashboard"> <i class="fas fa-user-shield"></i> Admin Dashboard</a>
+                        <a href="/admin/analysis"><i class="fas fa-chart-bar"></i> Data Analysis</a>
+                        <a href="/admin/line_drawing"><i class="fas fa-draw-polygon"></i> Line Drawing (Admin)</a>
+                    {% else %}
+                        <a href="/"> <i class="fas fa-home"></i> Home</a>
+                        <a href="/my_requests"><i class="fas fa-list-alt"></i> My Requests</a>
+                    {% endif %}
+                    <a href="/logout">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </nav>
+
+            </div> 
+        </div> 
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <!-- Step 1: Configure Legs -->
+            <section class="section" id="configSection">
+                <div class="section-header">
+                    <h2><i class="fas fa-cog"></i> Step 1: Configure Legs</h2>
+                </div>
+
+                <div class="leg-config" style=" margin: 20px auto;">
+                    <h3><i class="fas fa-hashtag"></i> Number of Legs</h3>
+                    <p style="color: #eee; margin-bottom: 15px;">Specify number of lines to draw (e.g., 4 for four directions)</p>
+                    <input type="number" id="numLegs" min="1" max="12" value="4" 
+                           style="padding: 15px; font-size: 1.2em; border: 2px solid #667eea; border-radius: 5px; width: 100px; text-align: center;">
+                    <button class="btn btn-primary" id="configLegsBtn" style="margin-right: 15px;">
+                         Next: Leg Names<i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Step 2: Name Legs -->
+            <section class="section" id="namingSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-tags"></i> Step 2: Leg Names</h2>
+                </div>
+
+                <div class="leg-config" style="margin: 20px auto;">
+                    <p style="color: #eee; margin-bottom: 15px;">Enter unique names for each Leg</p>
+                    <div id="legNamesInputs"></div>
+                    <button class="btn btn-success" id="saveNamesBtn" style="margin-top: 15px;">
+                         Next: Upload Files <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+            </section>
+
+            <!-- Step 3: Upload Files -->
+            <section class="section" id="uploadSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-upload"></i> Step 3: Upload Files</h2>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
+                    <div class="upload-zone" id="imageUploadZone" style="cursor: pointer;">
+                        <i class="fas fa-image" style="font-size: 3em; color: #667eea;"></i>
+                        <h3>Frame Image (First Frame)</h3>
+                        <p>Drag and drop or click to select</p>
+                        <input type="file" id="imageInput" accept="image/*" hidden>
+                    </div>
+
+                    <div class="upload-zone" id="csvUploadZone" style="cursor: pointer;">
+                        <i class="fas fa-file-csv" style="font-size: 3em; color: #667eea;"></i>
+                        <h3>Tracking File (tracks.csv)</h3>
+                        <p>Drag and drop or click to select</p>
+                        <input type="file" id="csvInput" accept=".csv" hidden>
+                    </div>
+                </div>
+
+                <div class="file-info" id="filesInfo" style="display: none; margin-top: 20px;">
+                    <h4><i class="fas fa-check-circle"></i> Uploaded Files</h4>
+                    <p id="imageFileName"></p>
+                    <p id="csvFileName"></p>
+                    
+                    <div style="margin-top: 15px;">
+                        <button class="btn btn-primary" id="startDrawingBtn">
+                            <i class="fas fa-pencil-alt"></i> Start Drawing
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 2: Draw Lines -->
+            <section class="section" id="drawingSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-pencil-ruler"></i> Step 4: Draw Lines</h2>
+                </div>
+
+                <div class="instruction-box">
+                    <h4><i class="fas fa-info-circle"></i> Instructions:</h4>
+                    <ul style="margin: 10px 0; padding-right: 20px; list-style: none;">
+                        <li>Select Leg and mode (IN or OUT)</li>
+                        <li>Click to add points on the line</li>
+                        <li>Press <kbd>Enter</kbd> to finish current line</li>
+                        <li>Press <kbd>Shift+Enter</kbd> to add new line in same mode</li>
+                        <li>IN lines in color <span class="color-indicator" style="background: lime;"></span> green</li>
+                        <li>OUT lines in color <span class="color-indicator" style="background: red;"></span> red</li>
+                    </ul>
+                </div>
+
+                <div class="controls-panel">
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <h3 id="currentLegInfo">Leg 1 / 4 - Drawing IN lines</h3>
+                    </div>
+                    
+                    <div style="text-align: center; margin-bottom: 15px;">
+                        <div class="line-mode active" id="modeIN" onclick="setMode('IN')">
+                            Entry Lines (IN) <i class="fas fa-sign-in-alt"></i>
+                        </div>
+                        <div class="line-mode" id="modeOUT" onclick="setMode('OUT')">
+                            Exit Lines (OUT) <i class="fas fa-sign-out-alt"></i>
+                        </div>
+                    </div>
+
+                    <div style="text-align: center;">
+                        <button class="btn btn-warning" onclick="clearCurrentLine()">
+                            Clear Current Line <i class="fas fa-eraser"></i>
+                        </button>
+                        <button class="btn btn-success" onclick="finishCurrentLine()">
+                            Finish Line (Enter) <i class="fas fa-check"></i>
+                        </button>
+                        <button class="btn btn-info" onclick="nextMode()">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="canvas-container" style="text-align: center;">
+                    <canvas id="drawingCanvas"></canvas>
+                </div>
+
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-success" id="finishDrawingBtn">
+                        <i class="fas fa-check"></i> Finish Drawing and Calculate Count
+                    </button>
+                </div>
+
+                <!-- Processing overlay: shown while server calculates results -->
+                <div id="processingOverlay" class="processing-overlay" aria-hidden="true">
+                    <div style="text-align:center; color: white; padding: 20px;">
+                        <div class="spinner" role="status" aria-hidden="true"></div>
+                        <div style="margin-top:12px; font-size:18px; font-weight:600;">Calculating... Please wait</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Step 5: Results -->
+            <section class="section" id="resultsSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-pie"></i> Step 5: Results</h2>
+                </div>
+
+                <div id="crossingResults"></div>
+
+                <div class="download-section" style="margin-top: 30px;">
+                    <h3><i class="fas fa-download"></i> Download Results</h3>
+                    <div class="download-buttons">
+                        <a href="#" class="btn btn-secondary" id="downloadTotals">
+                            <i class="fas fa-table"></i> Download Totals
+                        </a>
+                        <a href="#" class="btn btn-success" id="downloadOD">
+                            <i class="fas fa-file-csv"></i> Download OD Matrix (CSV)
+                        </a>
+                        <a href="#" class="btn btn-warning" id="downloadODExcel" style="display:none;">
+                            <i class="fas fa-file-excel"></i> Download OD Excel
+                        </a>
+
+                    </div>
+                </div>
+
+                <div style="text-align: center; margin-top: 20px;">
+                    <button class="btn btn-info" onclick="openSpeedCalculation()" style="margin-right: 10px;">
+                        <i class="fas fa-tachometer-alt"></i> Calculate Vehicle Speed
+                    </button>
+                    <button class="btn btn-warning" onclick="resetAll()">
+                        <i class="fas fa-redo"></i> Start Over
+                    </button>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Advanced Vehicle Tracking System - Line Drawing</p>
+        </div>
+    </footer>
+
+    <script>
+        let imageFile = null;
+        let csvFile = null;
+        let canvas, ctx;
+        let backgroundImage = null;
+        let currentPoints = [];
+        let allLines = {
+            in: [],  // [leg1: [[line1], [line2]], leg2: [...]]
+            out: []
+        };
+        let currentLeg = 0;
+        let currentMode = 'IN';
+        let numLegs = 4;
+        let legNamesIn = [];
+        let legNamesOut = [];
+        let analysisId = null;
+
+        // Step 1: Configure number of legs
+        document.getElementById('configLegsBtn').addEventListener('click', () => {
+            numLegs = parseInt(document.getElementById('numLegs').value);
+            
+            if (numLegs < 1 || numLegs > 12) {
+                alert('⚠️ Please enter a number between 1 and 12');
+                return;
+            }
+            
+            // Initialize arrays
+            allLines.in = Array(numLegs).fill(null).map(() => []);
+            allLines.out = Array(numLegs).fill(null).map(() => []);
+            
+            // Show naming section
+            document.getElementById('configSection').style.display = 'none';
+            document.getElementById('namingSection').style.display = 'block';
+            
+            // Generate name inputs
+            generateLegNameInputs();
+        });
+
+        function generateLegNameInputs() {
+            const container = document.getElementById('legNamesInputs');
+            container.innerHTML = '';
+            
+            // Create container for legs (vertical stack)
+            container.style.cssText = 'display: flex; flex-direction: column; gap: 15px; margin-bottom: 20px;';
+            
+            for (let i = 0; i < numLegs; i++) {
+                const div = document.createElement('div');
+                div.style.cssText = 'padding: 15px; background: rgb(255, 255, 255, 0.1); border-radius: 8px; border: 2px solid #667eea; display: flex; align-items: center; gap: 15px;';
+                div.innerHTML = `
+                    <label style="font-weight: bold; color: #667eea; font-size: 16px; min-width: 70px;">Leg ${i + 1}:</label>
+                    <input type="text" id="legName${i}" value="Leg${i + 1}" 
+                           style="padding: 10px; border: 2px solid #667eea; border-radius: 5px; flex: 1; box-sizing: border-box;">
+                    <span style="color: #eee; font-weight: bold; min-width: 120px;">→ -IN/-OUT</span>
+                `;
+                container.appendChild(div);
+            }
+        }
+
+        // Step 2: Save leg names
+        document.getElementById('saveNamesBtn').addEventListener('click', () => {
+            // Get leg names and add -IN/-OUT automatically
+            legNamesIn = [];
+            legNamesOut = [];
+            for (let i = 0; i < numLegs; i++) {
+                const baseName = document.getElementById(`legName${i}`).value.trim();
+                if (!baseName) {
+                    alert(`⚠️ Please enter name for Leg ${i + 1}`);
+                    return;
+                }
+                legNamesIn.push(baseName + '-IN');
+                legNamesOut.push(baseName + '-OUT');
+            }
+            
+            // Check if files already loaded from request
+            document.getElementById('namingSection').style.display = 'none';
+            
+            if (window.loadedImageFile && window.loadedImageFile.element) {
+                // Skip upload section, go directly to drawing
+                setupCanvasWithLoadedImage();
+                document.getElementById('drawingSection').style.display = 'block';
+                updateLegInfo();
+            } else {
+                // Show upload section for manual upload
+                document.getElementById('uploadSection').style.display = 'block';
+            }
+        });
+
+        // Upload handlers
+        document.getElementById('imageUploadZone').addEventListener('click', () => {
+            document.getElementById('imageInput').click();
+        });
+
+        document.getElementById('csvUploadZone').addEventListener('click', () => {
+            document.getElementById('csvInput').click();
+        });
+
+        document.getElementById('imageInput').addEventListener('change', (e) => {
+            imageFile = e.target.files[0];
+            if (imageFile) {
+                document.getElementById('imageFileName').innerHTML = 
+                    `<i class="fas fa-image"></i> Image: ${imageFile.name}`;
+                checkFiles();
+            }
+        });
+
+        document.getElementById('csvInput').addEventListener('change', (e) => {
+            csvFile = e.target.files[0];
+            if (csvFile) {
+                document.getElementById('csvFileName').innerHTML = 
+                    `<i class="fas fa-file-csv"></i> CSV: ${csvFile.name}`;
+                checkFiles();
+            }
+        });
+
+        function checkFiles() {
+            if (imageFile && csvFile) {
+                document.getElementById('filesInfo').style.display = 'block';
+            }
+        }
+
+        document.getElementById('startDrawingBtn').addEventListener('click', async () => {
+            // Check if image is already loaded (from request)
+            if (window.loadedImageFile && window.loadedImageFile.element) {
+                // Image already loaded, just setup canvas
+                setupCanvasWithLoadedImage();
+            } else {
+                // Upload files first
+                await uploadFiles();
+                
+                // Setup canvas
+                setupCanvas();
+            }
+            
+            // Show drawing section
+            document.getElementById('uploadSection').style.display = 'none';
+            document.getElementById('drawingSection').style.display = 'block';
+            
+            updateLegInfo();
+        });
+
+        function setupCanvasWithLoadedImage() {
+            canvas = document.getElementById('drawingCanvas');
+            ctx = canvas.getContext('2d');
+            
+            const img = window.loadedImageFile.element;
+            
+            // Set canvas size
+            const maxWidth = 1200;
+            const maxHeight = 800;
+            let width = img.width;
+            let height = img.height;
+            
+            if (width > maxWidth) {
+                height = (maxWidth / width) * height;
+                width = maxWidth;
+            }
+            
+            if (height > maxHeight) {
+                width = (maxHeight / height) * width;
+                height = maxHeight;
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            // Re-get context after resizing
+            ctx = canvas.getContext('2d');
+            
+            // Draw the image
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Add event listeners
+            canvas.addEventListener('click', handleCanvasClick);
+            document.addEventListener('keydown', handleKeyPress);
+            
+            console.log('✅ Canvas ready with loaded image');
+        }
+
+        async function uploadFiles() {
+            const formData = new FormData();
+            formData.append('image', imageFile);
+            formData.append('csv', csvFile);
+            
+            const response = await fetch('/api/line_drawing/upload', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+                analysisId = data.analysis_id;
+                console.log('Files uploaded:', analysisId);
+            }
+        }
+
+        function setupCanvas() {
+            canvas = document.getElementById('drawingCanvas');
+            ctx = canvas.getContext('2d');
+            
+            const img = new Image();
+            img.onload = function() {
+                // Set canvas size
+                const maxWidth = 1200;
+                const scale = maxWidth / img.width;
+                canvas.width = maxWidth;
+                canvas.height = img.height * scale;
+                
+                backgroundImage = img;
+                redrawCanvas();
+            };
+            img.src = URL.createObjectURL(imageFile);
+            
+            // Add click handler
+            canvas.addEventListener('click', handleCanvasClick);
+            
+            // Add keyboard handler
+            document.addEventListener('keydown', handleKeyPress);
+        }
+
+        function handleCanvasClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            currentPoints.push({x, y});
+            redrawCanvas();
+        }
+
+        function handleKeyPress(e) {
+            if (e.key === 'Enter') {
+                if (e.shiftKey) {
+                    // Add line and continue in same mode
+                    saveCurrentLine();
+                } else {
+                    // Finish and move to next
+                    finishCurrentLine();
+                }
+            }
+        }
+
+        function redrawCanvas() {
+            // Clear
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Draw background
+            if (backgroundImage) {
+                ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
+            }
+            
+            // Draw all completed lines
+            for (let i = 0; i < numLegs; i++) {
+                // Draw IN lines
+                allLines.in[i].forEach(line => drawLine(line, 'lime', 3));
+                // Draw OUT lines
+                allLines.out[i].forEach(line => drawLine(line, 'red', 3));
+            }
+            
+            // Draw current line
+            if (currentPoints.length > 0) {
+                const color = currentMode === 'IN' ? 'lime' : 'red';
+                drawLine(currentPoints, color, 3, true);
+            }
+        }
+
+        function drawLine(points, color, width, showPoints = false) {
+            if (points.length < 2) return;
+            
+            ctx.strokeStyle = color;
+            ctx.lineWidth = width;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            
+            ctx.beginPath();
+            ctx.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctx.lineTo(points[i].x, points[i].y);
+            }
+            ctx.stroke();
+            
+            if (showPoints) {
+                points.forEach(p => {
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+            }
+        }
+
+        async function adaptLastSavedLine(lineArray, legIndex) {
+            try {
+                const last = lineArray[legIndex][lineArray[legIndex].length - 1];
+                if (!last || last.length !== 2) return;
+
+                const imageW = backgroundImage ? backgroundImage.width : canvas.width;
+                const imageH = backgroundImage ? backgroundImage.height : canvas.height;
+
+                const payload = {
+                    line: last,
+                    analysis_id: analysisId,
+                    request_id: window.currentRequestId,
+                    canvas_width: canvas.width,
+                    canvas_height: canvas.height,
+                    image_width: imageW,
+                    image_height: imageH
+                };
+
+                const resp = await fetch('/api/line_drawing/adapt_line', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await resp.json();
+                if (data.success && data.adapted && Array.isArray(data.line)) {
+                    lineArray[legIndex][lineArray[legIndex].length - 1] = data.line.map(p => ({x: p.x, y: p.y}));
+                    redrawCanvas();
+                    console.log('🔧 Adaptive line applied');
+                } else {
+                    console.log('🔍 Adaptive: no change');
+                }
+            } catch (e) {
+                console.error('Adaptive line failed:', e);
+            }
+        }
+
+        async function saveCurrentLine() {
+            if (currentPoints.length < 2) {
+                alert('Must draw line with at least two points');
+                return;
+            }
+            
+            const lineArray = currentMode === 'IN' ? allLines.in : allLines.out;
+            lineArray[currentLeg].push([...currentPoints]);
+            
+            currentPoints = [];
+            redrawCanvas();
+
+            // Try adaptive conversion for straight lines (non-blocking)
+            try {
+                adaptLastSavedLine(lineArray, currentLeg);
+            } catch (err) {
+                console.error('Error invoking adaptive conversion:', err);
+            }
+        }
+
+        function finishCurrentLine() {
+            if (currentPoints.length >= 2) {
+                saveCurrentLine();
+            }
+            
+            // Move to next state
+            if (currentMode === 'IN') {
+                currentMode = 'OUT';
+            } else {
+                currentMode = 'IN';
+                currentLeg++;
+            }
+            
+            if (currentLeg >= numLegs) {
+                // Finished all legs - do nothing, user clicks finish button
+                alert('✅ Completed drawing all Legs! Click "Finish Drawing and Calculate Count"');
+            } else {
+                updateLegInfo();
+            }
+        }
+
+        function nextMode() {
+            finishCurrentLine();
+        }
+
+        function clearCurrentLine() {
+            currentPoints = [];
+            redrawCanvas();
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('modeIN').classList.toggle('active', mode === 'IN');
+            document.getElementById('modeOUT').classList.toggle('active', mode === 'OUT');
+            updateLegInfo();
+        }
+
+        function updateLegInfo() {
+            const legName = currentMode === 'IN' 
+                ? (legNamesIn[currentLeg] || `Leg ${currentLeg + 1}-IN`)
+                : (legNamesOut[currentLeg] || `Leg ${currentLeg + 1}-OUT`);
+            const modeText = currentMode === 'IN' ? 'Entry Lines (IN)' : 'Exit Lines (OUT)';
+            document.getElementById('currentLegInfo').textContent = 
+                `${legName} - ${modeText}`;
+        }
+
+        // Finish drawing and calculate (with loading UI)
+        document.getElementById('finishDrawingBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('finishDrawingBtn');
+            const overlay = document.getElementById('processingOverlay');
+
+            // Show loading state
+            try {
+                btn.disabled = true;
+                btn.classList.add('disabled');
+                btn.dataset.orig = btn.innerHTML;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Calculating...';
+                if (overlay) {
+                    overlay.style.display = 'flex';
+                    overlay.setAttribute('aria-hidden', 'false');
+                }
+
+                // Prepare data
+                const linesData = {
+                    analysis_id: analysisId,
+                    lines_in: allLines.in,
+                    lines_out: allLines.out,
+                    leg_names_in: legNamesIn,
+                    leg_names_out: legNamesOut,
+                    canvas_width: canvas.width,
+                    canvas_height: canvas.height,
+                    image_width: backgroundImage ? backgroundImage.width : canvas.width,
+                    image_height: backgroundImage ? backgroundImage.height : canvas.height,
+                    request_id: window.currentRequestId  // Add request_id if available
+                };
+
+                // Send to server
+                const response = await fetch('/api/line_drawing/calculate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(linesData)
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    showResults(data.results, data.files);
+
+                    // If this calculation belonged to a saved request and the server marked it completed,
+                    // display a short confirmation and log it.
+                    if (window.currentRequestId && data.request_completed) {
+                        console.log('✅ Request marked completed on server:', window.currentRequestId);
+
+                        // transient on-page notice
+                        const note = document.createElement('div');
+                        note.style.cssText = 'position:fixed; right:20px; top:100px; background:#16a34a; color:white; padding:10px 14px; border-radius:6px; box-shadow:0 6px 20px rgba(0,0,0,0.2); z-index:9999; font-weight:600;';
+                        note.textContent = `Request #${window.currentRequestId} — status: completed`;
+                        document.body.appendChild(note);
+                        setTimeout(() => { note.remove(); }, 3500);
+                    } else if (window.currentRequestId) {
+                        console.log('✅ Line Drawing results saved for request:', window.currentRequestId);
+                    }
+                } else {
+                    alert('Calculation failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (err) {
+                console.error('Error during calculation:', err);
+                alert('Error performing calculation: ' + (err.message || err));
+            } finally {
+                // Hide loading state
+                if (overlay) {
+                    overlay.style.display = 'none';
+                    overlay.setAttribute('aria-hidden', 'true');
+                }
+                if (btn.dataset && btn.dataset.orig) {
+                    btn.innerHTML = btn.dataset.orig;
+                    delete btn.dataset.orig;
+                }
+                btn.disabled = false;
+                btn.classList.remove('disabled');
+            }
+        });
+
+        function showResults(results, files) {
+            document.getElementById('drawingSection').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'block';
+            
+            let html = '<div class="results-grid">';
+            
+            // Total counts by vehicle type
+            if (results.totals) {
+                results.totals.forEach(item => {
+                    html += `
+                        <div class="result-card">
+                            <h3><i class="fas fa-car"></i> ${item.vehicle_type}</h3>
+                            <h2 style="color: #667eea; margin: 10px 0;">${item.count}</h2>
+                            <p>Vehicle</p>
+                        </div>
+                    `;
+                });
+            }
+            
+            html += '</div>';
+            
+            // OD Matrix summary
+            if (results.od_summary) {
+                html += '<h3 style="margin-top: 30px;"><i class="fas fa-table"></i> OD Matrix Summary</h3>';
+                html += '<div class="results-grid">';
+                
+                for (const [pair, count] of Object.entries(results.od_summary)) {
+                    html += `
+                        <div class="result-card">
+                            <h4>${pair}</h4>
+                            <h2 style="color: #667eea;">${count}</h2>
+                        </div>
+                    `;
+                }
+                
+                html += '</div>';
+            }
+
+            // If this session is tied to a request_id, give user an explicit Continue button
+            // if (window.currentRequestId) {
+            //     html += `
+            //         <div style="text-align:center; margin-top:20px;">
+            //             <button id="continueToAnalysisBtn" class="btn btn-info">
+            //                 <i class="fas fa-arrow-right"></i> Continue to Analysis
+            //             </button>
+            //         </div>
+            //     `;
+            // }
+            
+            document.getElementById('crossingResults').innerHTML = html;
+            
+            // Set download links
+            if (files) {
+                document.getElementById('downloadTotals').href = `/api/download/${files.totals}`;
+                document.getElementById('downloadOD').href = `/api/download/${files.od_matrix}`;
+
+                // Show OD Excel download if server produced it
+                const odExcelBtn = document.getElementById('downloadODExcel');
+                if (files.od_excel && odExcelBtn) {
+                    odExcelBtn.style.display = 'inline-flex';
+                    odExcelBtn.href = `/api/download/${files.od_excel}`;
+                } else if (odExcelBtn) {
+                    odExcelBtn.style.display = 'none';
+                }
+
+                // If od-by-type CSV exists, fetch and render per-type tabs (supports long and wide CSV formats)
+                if (files.od_matrix_by_type) {
+                    fetch(`/api/download/${files.od_matrix_by_type}`)
+                        .then(r => r.text())
+                        .then(csvText => renderOdByTypeTabs(csvText))
+                        .catch(err => console.warn('Could not load od_matrix_by_type:', err));
+                }
+
+                // Attach continue button handler if present (guarded)
+                const contBtn = document.getElementById('continueToAnalysisBtn');
+                if (contBtn) {
+                    const _userRole = "{{ session.role or 'user' }}";
+                    contBtn.addEventListener('click', () => {
+                        if (_userRole === 'admin') {
+                            window.location.href = `/admin/analysis?request_id=${window.currentRequestId}`;
+                        } else {
+                            window.location.href = `/user/analysis?request_id=${window.currentRequestId}`;
+                        }
+                    });
+                }
+            }
+        }
+
+        function resetAll() {
+            location.reload();
+        }
+
+        // Render OD-by-type as tabs. Supports two CSV formats:
+        // 1) LONG format: columns (in_name,out_name,vehicle_type,count)
+        // 2) WIDE format: columns (in_name,out_name,<vehicle types...>,total)
+        function renderOdByTypeTabs(csvText) {
+            const lines = csvText.trim().split(/\r?\n/).filter(Boolean);
+            if (!lines.length) return;
+            const headers = lines[0].split(',').map(h => h.trim());
+
+            const rows = lines.slice(1).map(r => r.split(',').map(c => c.trim()));
+
+            // Detect LONG format (has vehicle_type & count columns)
+            const hasVehicleType = headers.includes('vehicle_type') && headers.includes('count');
+
+            let inNames = [];
+            let outNames = [];
+            let vehicleTypes = new Set();
+            const matrix = {}; // matrix[type][in_name][out_name] = count
+
+            if (hasVehicleType) {
+                const idx_in = headers.indexOf('in_name');
+                const idx_out = headers.indexOf('out_name');
+                const idx_vt = headers.indexOf('vehicle_type');
+                const idx_count = headers.indexOf('count');
+
+                rows.forEach(cols => {
+                    const in_name = cols[idx_in];
+                    const out_name = cols[idx_out];
+                    const vt = cols[idx_vt];
+                    const cnt = parseInt(cols[idx_count] || '0', 10) || 0;
+
+                    inNames.includes(in_name) || inNames.push(in_name);
+                    outNames.includes(out_name) || outNames.push(out_name);
+                    vehicleTypes.add(vt);
+
+                    matrix[vt] = matrix[vt] || {};
+                    matrix[vt][in_name] = matrix[vt][in_name] || {};
+                    matrix[vt][in_name][out_name] = cnt;
+                });
+
+            } else {
+                // Fallback: WIDE format where vehicle types are columns between out_name and total
+                const idx_out = headers.indexOf('out_name');
+                const idx_total = headers.indexOf('total');
+                const typeCols = (idx_out >=0 && idx_total > idx_out) ? headers.slice(idx_out + 1, idx_total) : [];
+
+                rows.forEach(cols => {
+                    const in_name = cols[headers.indexOf('in_name')];
+                    const out_name = cols[headers.indexOf('out_name')];
+                    inNames.includes(in_name) || inNames.push(in_name);
+                    outNames.includes(out_name) || outNames.push(out_name);
+
+                    typeCols.forEach((vt, i) => {
+                        const val = parseInt(cols[idx_out + 1 + i] || '0', 10) || 0;
+                        vehicleTypes.add(vt);
+                        matrix[vt] = matrix[vt] || {};
+                        matrix[vt][in_name] = matrix[vt][in_name] || {};
+                        matrix[vt][in_name][out_name] = val;
+                    });
+                });
+            }
+
+            vehicleTypes = Array.from(vehicleTypes).sort();
+            if (vehicleTypes.length === 0) return;
+
+            // Build HTML tabs + tables
+            let tabHtml = '<div style="margin-top:18px;">';
+            tabHtml += '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">';
+            vehicleTypes.forEach((vt, idx) => {
+                tabHtml += `<button class=\"btn btn-secondary od-type-tab\" data-type=\"${vt}\">${vt}</button>`;
+            });
+            tabHtml += '</div>';
+
+            tabHtml += '<div id="odTypeTables">';
+            vehicleTypes.forEach((vt, idx) => {
+                // Build pivot table for this vehicle type
+                let tbl = '<table style="width:100%; border-collapse: collapse; margin-bottom: 18px;">';
+                tbl += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">IN → OUT</th>';
+                outNames.forEach(o => tbl += `<th style=\"padding:8px; text-align:center; border-bottom:1px solid var(--border-color);\">${o}</th>`);
+                tbl += '</tr></thead>';
+                tbl += '<tbody>';
+
+                inNames.forEach(inN => {
+                    tbl += `<tr><td style=\"padding:8px; font-weight:600; border-bottom:1px solid var(--border-color);\">${inN}</td>`;
+                    outNames.forEach(outN => {
+                        const v = (matrix[vt] && matrix[vt][inN] && matrix[vt][inN][outN]) || 0;
+                        tbl += `<td style=\"padding:8px; text-align:center; border-bottom:1px solid var(--border-color);\">${v}</td>`;
+                    });
+                    tbl += '</tr>';
+                });
+
+                tbl += '</tbody></table>';
+                tabHtml += `<div class=\"od-type-table\" data-type=\"${vt}\" style=\"display:${idx===0?'block':'none'};\">${tbl}</div>`;
+            });
+
+            tabHtml += '</div></div>';
+
+            const container = document.getElementById('crossingResults');
+            const holder = document.getElementById('odByTypeContainer');
+            if (holder) holder.innerHTML = tabHtml;
+            else {
+                // append under crossingResults if placeholder missing
+                const div = document.createElement('div');
+                div.id = 'odByTypeContainer';
+                div.innerHTML = tabHtml;
+                container.appendChild(div);
+            }
+
+            // Tab click handlers
+            document.querySelectorAll('.od-type-tab').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const t = btn.dataset.type;
+                    document.querySelectorAll('.od-type-tab').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    document.querySelectorAll('.od-type-table').forEach(div => {
+                        div.style.display = div.dataset.type === t ? 'block' : 'none';
+                    });
+                });
+            });
+        }
+
+        function openSpeedCalculation() {
+            // Build URL parameters
+            const legNamesEncoded = encodeURIComponent(JSON.stringify(legNamesIn.map((name, i) => name.replace('-IN', ''))));
+            
+            let url = `/speed_calculation?leg_names=${legNamesEncoded}`;
+            
+            if (analysisId) {
+                url += `&analysis_id=${analysisId}`;
+            }
+            
+            if (window.currentRequestId) {
+                url += `&request_id=${window.currentRequestId}`;
+            }
+            
+            console.log('Opening speed calculation:', url);
+            window.location.href = url;
+        }
+        
+        // Auto-load request data if request_id is provided
+        {% if request_id %}
+        window.addEventListener('DOMContentLoaded', async function() {
+            try {
+                console.log('🔍 Loading request data for ID: {{ request_id }}');
+                
+                // Get request data
+                const response = await fetch('/api/request_status/{{ request_id }}');
+                console.log('📡 Response status:', response.status);
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('❌ API Error:', response.status, errorText);
+                    alert(`Error loading request: ${response.status}\n${errorText}`);
+                    return;
+                }
+                
+                const data = await response.json();
+                console.log('📦 Received data:', data);
+                
+                if (data.error) {
+                    console.error('API Error:', data.error);
+                    alert('Error: ' + data.error + '\n\nPlease check if the request exists and try again.');
+                    return;
+                }
+                
+                console.log('✅ Request data received:', data);
+                
+                // Store CSV path for later use (will be used during calculation)
+                const csvPath = data.csv_path;
+                if (csvPath) {
+                    // Convert backslashes to forward slashes
+                    const normalizedCsvPath = csvPath.replace(/\\/g, '/');
+                    let csvRelative;
+                    if (normalizedCsvPath.includes('unified_output/')) {
+                        csvRelative = normalizedCsvPath.split('unified_output/')[1];
+                    } else {
+                        csvRelative = normalizedCsvPath;
+                    }
+                    
+                    // Store CSV path globally for later use
+                    window.loadedCsvPath = csvRelative ? '/unified_output/' + csvRelative : null;
+                    console.log('📊 CSV path stored:', window.loadedCsvPath);
+                }
+                
+                // Auto-load frame image
+                const framePath = data.frame1_path;
+                console.log('📸 Frame path from API:', framePath);
+                
+                if (framePath) {
+                    // Convert backslashes to forward slashes
+                    const normalizedPath = framePath.replace(/\\/g, '/');
+                    console.log('🔄 Normalized path:', normalizedPath);
+                    
+                    // Extract relative path after 'unified_output/'
+                    let frameRelative;
+                    if (normalizedPath.includes('unified_output/')) {
+                        frameRelative = normalizedPath.split('unified_output/')[1];
+                    } else {
+                        // Path might already be relative
+                        frameRelative = normalizedPath;
+                    }
+                    console.log('📂 Frame relative path:', frameRelative);
+                    
+                    if (frameRelative) {
+                        const frameUrl = '/unified_output/' + frameRelative;
+                        console.log('🔗 Frame URL:', frameUrl);
+                        
+                        // Setup canvas first
+                        canvas = document.getElementById('drawingCanvas');
+                        if (!canvas) {
+                            console.error('❌ Canvas element not found!');
+                            return;
+                        }
+                        console.log('✅ Canvas element found:', canvas);
+                        
+                        ctx = canvas.getContext('2d');
+                        console.log('✅ Canvas context obtained');
+                        
+                        // Add event listeners
+                        canvas.addEventListener('click', handleCanvasClick);
+                        document.addEventListener('keydown', handleKeyPress);
+                        console.log('✅ Event listeners added');
+                        
+                        // Load image to canvas
+                        const img = new Image();
+                        img.onload = function() {
+                            console.log('🖼️ Image loaded! Size:', img.width, 'x', img.height);
+                            backgroundImage = img;
+                            
+                            // Resize canvas to fit image
+                            const maxWidth = 1200;
+                            const maxHeight = 800;
+                            let width = img.width;
+                            let height = img.height;
+                            
+                            if (width > maxWidth) {
+                                height = (maxWidth / width) * height;
+                                width = maxWidth;
+                            }
+                            
+                            if (height > maxHeight) {
+                                width = (maxHeight / height) * width;
+                                height = maxHeight;
+                            }
+                            
+                            console.log('📐 Canvas size set to:', width, 'x', height);
+                            canvas.width = width;
+                            canvas.height = height;
+                            
+                            // Re-get context after resizing (resizing clears context)
+                            ctx = canvas.getContext('2d');
+                            
+                            // Draw the image
+                            ctx.drawImage(img, 0, 0, width, height);
+                            console.log('✅ Image drawn on canvas successfully!');
+                            
+                            // Store the loaded image file for later use (AFTER image loaded)
+                            window.loadedImageFile = {
+                                width: img.width,
+                                height: img.height,
+                                element: img
+                            };
+                            console.log('✅ Image cached in window.loadedImageFile');
+                        };
+                        img.onerror = function(e) {
+                            console.error('❌ Failed to load frame:', frameUrl);
+                            console.error('Error details:', e);
+                            alert('Failed to load image: ' + frameUrl);
+                        };
+                        console.log('⏳ Loading image from:', frameUrl);
+                        img.src = frameUrl;
+                    } else {
+                        console.error('❌ Could not extract frame relative path');
+                    }
+                } else {
+                    console.error('❌ No frame path in response');
+                }
+                
+                // Store request_id for later use
+                window.currentRequestId = {{ request_id }};
+                
+                // Hide upload section but SHOW config and naming sections
+                document.getElementById('uploadSection').style.display = 'none';
+                document.getElementById('configSection').style.display = 'block';
+                document.getElementById('namingSection').style.display = 'none';
+                document.getElementById('drawingSection').style.display = 'none';
+                
+                // Display notification
+                setTimeout(() => {
+                    alert('✅ Request data loaded successfully! #{{ request_id }}\n\n📊 CSV: Loaded\n🖼️ Frame: Loaded\n\n👉 Please configure:\n1️⃣ Choose number of legs\n2️⃣ Enter leg names\n3️⃣ Start drawing');
+                }, 500);
+                
+            } catch (error) {
+                console.error('Error loading request data:', error);
+                console.error('Error details:', error.stack);
+                alert('Error loading request data\n\nDetails: ' + error.message + '\n\nPlease check console for more information.');
+            }
+        });
+        {% endif %}
+    </script>
+</body>
+</html>

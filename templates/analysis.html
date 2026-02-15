@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Analysis - Vehicle Tracking System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style> 
+    .form-control, input, select, textarea {
+        width: auto !important;
+    }
+        .analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 25px;
+            border-radius: 15px;
+            color: white;
+            text-align: center;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+        }
+        .stat-box h3 {
+            font-size: 2.5em;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .stat-box p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        .vehicle-chart {
+            background: var(--bg-card);
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: var(--shadow-lg);
+            margin: 20px 0;
+            border: 1px solid var(--border-color);
+        }
+        .vehicle-bar {
+            margin: 15px 0;
+        }
+        .vehicle-bar-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        .vehicle-bar-fill {
+            height: 30px;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            border-radius: 5px;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            padding: 0 10px;
+            color: white;
+            font-weight: bold;
+        }
+        .upload-zone {
+            border: 3px dashed var(--border-color);
+            padding: 40px;
+            text-align: center;
+            border-radius: 15px;
+            background: var(--bg-tertiary);
+            transition: all 0.3s;
+            cursor: pointer;
+        }
+        .upload-zone:hover {
+            border-color: var(--accent-primary);
+            background: var(--bg-hover);
+        }
+        .upload-zone.dragover {
+            border-color: var(--accent-success);
+            background: rgba(16, 185, 129, 0.1);
+        }
+        .file-info {
+            margin-top: 15px;
+            padding: 15px;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            display: none;
+        } 
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+ 
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-chart-line"></i>
+                    <h1>Tracking Data Analysis</h1>
+                </div>
+
+                <nav class="nav-links">
+                    <a href="/admin/dashboard"> <i class="fas fa-user-shield"></i> Admin Dashboard</a>
+                    <a href="/admin/line_drawing">
+                        <i class="fas fa-draw-polygon"></i> Line Drawing
+                    </a>
+                    <a href="/logout">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </nav>
+
+                
+            </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <!-- Upload Section -->
+            <section class="section" id="uploadSection">
+                <div class="section-header">
+                    <h2><i class="fas fa-file-upload"></i> Upload Tracking File</h2>
+                    <p>Upload tracks.csv file for comprehensive analysis</p>
+                </div>
+
+                <div class="upload-zone" id="uploadZone">
+                    <i class="fas fa-cloud-upload-alt" style="font-size: 4em; color: #667eea;"></i>
+                    <h3>Drag and Drop CSV File Here</h3>
+                    <p>or</p>
+                    <label for="csvInput" class="btn btn-primary">
+                        <i class="fas fa-folder-open"></i> Choose CSV File
+                    </label>
+                    <input type="file" id="csvInput" accept=".csv" hidden>
+                </div>
+
+                <div class="file-info" id="fileInfo">
+                    <h4><i class="fas fa-check-circle"></i> File uploaded successfully</h4>
+                    <p id="fileName"></p>
+                    
+                    <!-- Direction Configuration -->
+                    <div style="padding: 20px; border-radius: 10px; margin: 20px 0; border: 2px solid #667eea;">
+                        <h4><i class="fas fa-compass"></i> Select Expected Directions in Video</h4>
+                        <p style="color: #eee; font-size: 0.9em;">
+                            ⚠️ <strong>Important:</strong> Choose directions where vehicles <strong>actually</strong> move in the video.<br>
+                            💡 If unsure, choose "All Directions" for actual directions.
+                        </p>
+                        
+<div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin: 20px 0;">
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">⬆️ North (Upward)</span>
+        <input type="checkbox" id="dir_north" value="North" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">⬇️ South (Downward)</span>
+        <input type="checkbox" id="dir_south" value="South" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">➡️ East (Rightward)</span>
+        <input type="checkbox" id="dir_east" value="East" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">⬅️ West (Leftward)</span>
+        <input type="checkbox" id="dir_west" value="West" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">↗️ Northeast</span>
+        <input type="checkbox" id="dir_ne" value="Northeast" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">↖️ Northwest</span>
+        <input type="checkbox" id="dir_nw" value="Northwest" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">↘️ Southeast</span>
+        <input type="checkbox" id="dir_se" value="Southeast" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between;">
+        <span style="flex-grow: 1;">↙️ Southwest</span>
+        <input type="checkbox" id="dir_sw" value="Southwest" style="transform: scale(1.2);">
+    </label>
+    <label style="display: flex; align-items: center; padding: 12px; background: rgba(255, 255, 255, 0.1); border-radius: 8px; cursor: pointer; justify-content: space-between; grid-column: span 4;">
+        <strong style="flex-grow: 1;">✅ All Directions (No Filter)</strong>
+        <input type="checkbox" id="dir_all" style="transform: scale(1.2);">
+    </label>
+</div>
+
+                        
+                    </div>
+                    
+                    <button class="btn btn-success" id="analyzeBtn">
+                        <i class="fas fa-play"></i> Start Analysis
+                    </button>
+                </div>
+
+                <div class="file-info" id="uploadingInfo" style="display: none; background: var(--bg-tertiary); color: var(--text-primary);">
+                    <h4><i class="fas fa-spinner fa-spin"></i> Uploading file...</h4>
+                    <p>Please wait</p>
+                </div>
+            </section>
+
+            <!-- Loading Section -->
+            <section class="section" id="loadingSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-spinner fa-spin"></i> Analyzing...</h2>
+                    <p>Performing data analysis, please wait</p>
+                </div>
+            </section>
+
+            <!-- Results Section -->
+            <section class="section" id="resultsSection" style="display: none;">
+                <div class="section-header">
+                    <h2><i class="fas fa-chart-pie"></i> Analysis Results</h2>
+                    <p>Comprehensive analysis of uploaded data</p>
+                </div>
+
+                <!-- Summary Statistics -->
+                <div class="analysis-grid">
+                    <div class="stat-box" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+                        <i class="fas fa-road" style="font-size: 2em;"></i>
+                        <h3 id="totalTracks">0</h3>
+                        <p>Total Tracks</p>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                        <i class="fas fa-eye" style="font-size: 2em;"></i>
+                        <h3 id="totalDetections">0</h3>
+                        <p>Total Detections</p>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+                        <i class="fas fa-film" style="font-size: 2em;"></i>
+                        <h3 id="totalFrames">0</h3>
+                        <p>Total Frames</p>
+                    </div>
+                    <div class="stat-box" style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);">
+                        <i class="fas fa-chart-line" style="font-size: 2em;"></i>
+                        <h3 id="avgTrackLength">0</h3>
+                        <p>Average Track Length</p>
+                    </div>
+                </div>
+
+                <!-- Vehicle Type Distribution -->
+                <div class="vehicle-chart">
+                    <h3><i class="fas fa-car"></i> Vehicle Type Distribution</h3>
+                    <div id="vehicleChart"></div>
+                </div>
+                
+                <!-- Filter Statistics -->
+                <div class="vehicle-chart" id="filterStatsSection" style="display: none;">
+                    <h3><i class="fas fa-filter"></i> Filter Statistics and Data Quality</h3>
+                    <div id="filterStatsContent"></div>
+                </div>
+
+                <!-- Track Statistics -->
+                <div class="vehicle-chart">
+                    <h3><i class="fas fa-chart-bar"></i> Track Statistics</h3>
+                    <div class="analysis-grid">
+                        <div>
+                            <p><strong>Shortest Track:</strong> <span id="minTrackLength">0</span> frame</p>
+                            <p><strong>Longest Track:</strong> <span id="maxTrackLength">0</span> frame</p>
+                        </div>
+                        <div>
+                            <p><strong>Average Track Length:</strong> <span id="avgLength">0</span> frame</p>
+                            <p><strong>Median Track Length:</strong> <span id="medianLength">0</span> frame</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Advanced Statistics (from testApp2) -->
+                    <div style="margin-top: 20px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;">
+                        <h4 style="margin: 0 0 15px 0;"><i class="fas fa-chart-line"></i> Advanced Statistics</h4>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px;">
+                                <div style="font-size: 0.9em; opacity: 0.9;">Average Track Length (pixels)</div>
+                                <div style="font-size: 1.8em; font-weight: bold; margin-top: 5px;" id="avgPathLength">-</div>
+                            </div>
+                            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px;">
+                                <div style="font-size: 0.9em; opacity: 0.9;">Average Duration (seconds)</div>
+                                <div style="font-size: 1.8em; font-weight: bold; margin-top: 5px;" id="avgDuration">-</div>
+                            </div>
+                            <div style="background: rgba(255,255,255,0.1); padding: 15px; border-radius: 8px;">
+                                <div style="font-size: 0.9em; opacity: 0.9;">Average Speed (pixels/second)</div>
+                                <div style="font-size: 1.8em; font-weight: bold; margin-top: 5px;" id="avgSpeed">-</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Direction Analysis -->
+                <div class="vehicle-chart" id="directionSection" style="display: none;">
+                    <h3><i class="fas fa-compass"></i> Direction Analysis</h3>
+                    <div id="directionSummary"></div>
+                    
+                    <!-- Direction-Vehicle Statistics Table -->
+                    <div id="directionVehicleStats" style="margin: 20px 0;"></div>
+                    
+                    <div id="directionDetails" style="max-height: 400px; overflow-y: auto; margin-top: 20px;"></div>
+                </div>
+
+                <!-- Visualization Charts Section -->
+                <div class="vehicle-chart" id="chartsSection" style="display: none;">
+                    <h3><i class="fas fa-chart-area"></i> Charts and Visualizations</h3>
+                    <p style="color: #666; margin-bottom: 20px;">Illustrative charts for vehicle data analysis</p>
+                    
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">
+                        <!-- Heatmap -->
+                        <div id="heatmapCard" style="display: none; background: var(--bg-secondary); padding: 15px; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <h4 style="margin: 0 0 15px 0; color: #667eea;"><i class="fas fa-fire"></i> Heatmap</h4>
+                            <img id="heatmapImg" src="" alt="Heatmap" style="width: 100%; border-radius: 8px; cursor: pointer;" onclick="openImageModal(this.src)">
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Shows areas with highest vehicle density</p>
+                        </div>
+                        
+                        <!-- All Tracks -->
+                        <div id="tracksCard" style="display: none; background: var(--bg-secondary); padding: 15px; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <h4 style="margin: 0 0 15px 0; color: #667eea;"><i class="fas fa-route"></i> All Vehicle Tracks</h4>
+                            <img id="tracksImg" src="" alt="All Tracks" style="width: 100%; border-radius: 8px; cursor: pointer;" onclick="openImageModal(this.src)">
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Display all tracks with start and end points</p>
+                        </div>
+                        
+                        <!-- Speed Histogram -->
+                        <div id="speedCard" style="display: none; background: var(--bg-secondary); padding: 15px; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <h4 style="margin: 0 0 15px 0; color: #667eea;"><i class="fas fa-tachometer-alt"></i> Speed Distribution</h4>
+                            <img id="speedImg" src="" alt="Speed Distribution" style="width: 100%; border-radius: 8px; cursor: pointer;" onclick="openImageModal(this.src)">
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Chart of vehicle speed distribution</p>
+                        </div>
+                        
+                        <!-- Direction Chart -->
+                        <div id="directionChartCard" style="display: none; background: var(--bg-secondary); padding: 15px; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <h4 style="margin: 0 0 15px 0; color: #667eea;"><i class="fas fa-compass"></i> Direction Distribution</h4>
+                            <img id="directionChartImg" src="" alt="Direction Distribution" style="width: 100%; border-radius: 8px; cursor: pointer;" onclick="openImageModal(this.src)">
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Pie chart showing different direction percentages</p>
+                        </div>
+                        
+                        <!-- Overview -->
+                        <div id="overviewCard" style="display: none; background: var(--bg-secondary); padding: 15px; border-radius: 10px; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <h4 style="margin: 0 0 15px 0; color: #667eea;"><i class="fas fa-image"></i> Tracks Overview</h4>
+                            <img id="overviewImg" src="" alt="Overview" style="width: 100%; border-radius: 8px; cursor: pointer;" onclick="openImageModal(this.src)">
+                            <p style="font-size: 0.9em; color: #666; margin-top: 10px;">Tracks on the original frame</p>
+                        </div>
+                    </div>
+                    
+                    <div style="text-align: center; margin-top: 20px;">
+                        <button class="btn btn-primary" onclick="downloadAllCharts()">
+                            <i class="fas fa-download"></i> Download All Charts
+                        </button>
+                        {% if request_id %}
+                        <button class="btn btn-primary" onclick="saveToRequest()" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); margin-right: 10px;">
+                            <i class="fas fa-save"></i> Save Results for Request #{{ request_id }}
+                        </button>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <!-- Image Modal -->
+                <div id="imageModal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); padding: 20px;" onclick="closeImageModal()">
+                    <span style="position: absolute; top: 20px; left: 20px; color: white; font-size: 40px; cursor: pointer;" onclick="closeImageModal()">&times;</span>
+                    <img id="modalImg" src="" style="display: block; margin: auto; max-width: 95%; max-height: 95%; margin-top: 50px; border-radius: 10px;">
+                </div>
+
+                <!-- Download Section -->
+                <div class="download-section" style="margin: 20px 0;">
+                    <h3 style="font-size: 1.5rem; margin-bottom: 10px;">
+                        <i class="fas fa-download" style="margin-right: 10px;"></i> Download Analysis Results
+                    </h3>
+                    <div class="download-buttons" style="display: flex; flex-wrap: wrap; gap: 15px;">
+                        <a href="#" class="btn btn-primary" id="downloadTotals" style="padding: 10px 20px; font-size: 1rem;">
+                            <i class="fas fa-file-csv" style="margin-right: 8px;"></i> Download Statistics
+                        </a>
+                        <a href="#" class="btn btn-secondary" id="downloadStats" style="padding: 10px 20px; font-size: 1rem;">
+                            <i class="fas fa-table" style="margin-right: 8px;"></i> Download Track Statistics
+                        </a>
+                        <a href="#" class="btn btn-success" id="downloadDirections" style="display: none; padding: 10px 20px; font-size: 1rem;">
+                            <i class="fas fa-compass" style="margin-right: 8px;"></i> Download Direction Changes
+                        </a>
+                        <a href="#" class="btn btn-info" id="downloadMeta" style="padding: 10px 20px; font-size: 1rem;">
+                            <i class="fas fa-file-code" style="margin-right: 8px;"></i> Download Metadata
+                        </a>
+                    </div>
+                </div>
+
+                <div class="action-buttons" style="margin-top: 20px;">
+                    <button class="btn btn-success" id="newAnalysisBtn" style="padding: 10px 20px; font-size: 1.2rem;">
+                        <i class="fas fa-plus" style="margin-right: 8px;"></i> New Analysis
+                    </button>
+                </div>
+
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2026 Advanced Vehicle Tracking System - Data Analysis</p>
+        </div>
+    </footer>
+
+    <script>
+        let currentAnalysisId = null;
+        let currentFiles = null;
+
+        // Elements
+        const uploadZone = document.getElementById('uploadZone');
+        const csvInput = document.getElementById('csvInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+        const uploadSection = document.getElementById('uploadSection');
+        const loadingSection = document.getElementById('loadingSection');
+        const resultsSection = document.getElementById('resultsSection');
+        const newAnalysisBtn = document.getElementById('newAnalysisBtn');
+        const uploadingInfo = document.getElementById('uploadingInfo');
+
+        // Direction checkboxes
+        const dirAll = document.getElementById('dir_all');
+        const dirCheckboxes = [
+            'dir_north', 'dir_south', 'dir_east', 'dir_west',
+            'dir_ne', 'dir_nw', 'dir_se', 'dir_sw'
+        ];
+
+        // Handle "All Directions" checkbox
+        if (dirAll) {
+            dirAll.addEventListener('change', function() {
+                dirCheckboxes.forEach(id => {
+                    const checkbox = document.getElementById(id);
+                    if (checkbox) {
+                        checkbox.disabled = dirAll.checked;
+                        if (dirAll.checked) {
+                            checkbox.checked = false;
+                        }
+                    }
+                });
+            });
+        }
+
+        // Upload Zone Events
+        uploadZone.addEventListener('click', () => csvInput.click());
+        
+        uploadZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadZone.classList.add('dragover');
+        });
+
+        uploadZone.addEventListener('dragleave', () => {
+            uploadZone.classList.remove('dragover');
+        });
+
+        uploadZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        csvInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        // Handle File Upload
+        async function handleFile(file) {
+            console.log('📁 File selected:', file.name, 'Size:', file.size);
+            
+            if (!file.name.endsWith('.csv')) {
+                alert('يرجى رفع ملف CSV فقط');
+                return;
+            }
+
+            if (file.size === 0) {
+                alert('الملف فارغ! يرجى اختيار ملف صحيح');
+                return;
+            }
+
+            if (file.size > 50 * 1024 * 1024) { // 50MB limit
+                alert('حجم الملف كبير جداً! الحد الأقصى 50MB');
+                return;
+            }
+// Show uploading indicator
+            uploadZone.style.display = 'none';
+            uploadingInfo.style.display = 'block';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            console.log('📤 Uploading file...');
+
+            try {
+                const response = await fetch('/api/analyze/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                console.log('📥 Response status:', response.status);
+
+                // Hide uploading indicator
+                uploadingInfo.style.display = 'none';
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    console.error('❌ Upload failed:', errorData);
+                    alert('فشل رفع الملف: ' + (errorData.error || 'خطأ غير معروف'));
+                    uploadZone.style.display = 'block';
+                    return;
+                }
+
+                const data = await response.json();
+                console.log('✅ Upload successful:', data);
+                
+                if (data.success) {
+                    currentAnalysisId = data.analysis_id;
+                    fileName.textContent = `الملف: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+                    fileInfo.style.display = 'block';
+                } else {
+                    alert('فشل رفع الملف: ' + data.error);
+                    uploadZone.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('❌ Upload error:', error);
+                uploadingInfo.style.display = 'none';
+                uploadZone.style.display = 'block';
+                alert('حدث خطأ أثناء رفع الملف: ' + error.message);
+            }
+        }
+
+        // Analyze Button
+        analyzeBtn.addEventListener('click', async () => {
+            if (!currentAnalysisId) return;
+
+            // Get selected directions
+            const selectedDirections = [];
+            const allDirections = document.getElementById('dir_all').checked;
+            
+            if (!allDirections) {
+                const dirCheckboxes = [
+                    'dir_north', 'dir_south', 'dir_east', 'dir_west',
+                    'dir_ne', 'dir_nw', 'dir_se', 'dir_sw'
+                ];
+                
+                dirCheckboxes.forEach(id => {
+                    const checkbox = document.getElementById(id);
+                    if (checkbox && checkbox.checked) {
+                        selectedDirections.push(checkbox.value);
+                    }
+                });
+                
+                if (selectedDirections.length === 0) {
+                    alert('⚠️ يرجى اختيار اتجاه واحد على الأقل or تفعيل "جميع الاتجاهات"');
+                    return;
+                }
+            }
+
+            uploadSection.style.display = 'none';
+            loadingSection.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/analyze/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        analysis_id: currentAnalysisId,
+                        expected_directions: allDirections ? 'all' : selectedDirections
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Show results first
+                    showResults(data.analysis_results, data.files, data.direction_data || []);
+                    
+                    // Then generate and display charts
+                    await generateAndDisplayCharts(currentAnalysisId);
+                } else {
+                    alert('فشل التحليل: ' + data.error);
+                    resetForm();
+                }
+            } catch (error) {
+                console.error('Analysis error:', error);
+                alert('Error occurred during analysis');
+                resetForm();
+            }
+        });
+
+        // Show Results
+        function showResults(results, files, directionData) {
+            loadingSection.style.display = 'none';
+            resultsSection.style.display = 'block';
+
+            // Update statistics
+            document.getElementById('totalTracks').textContent = results.total_tracks;
+            document.getElementById('totalDetections').textContent = results.total_detections;
+            document.getElementById('totalFrames').textContent = results.frame_range?.total_frames || 0;
+            document.getElementById('avgTrackLength').textContent = results.track_statistics?.avg_length?.toFixed(1) || 0;
+
+            document.getElementById('minTrackLength').textContent = results.track_statistics?.min_length || 0;
+            document.getElementById('maxTrackLength').textContent = results.track_statistics?.max_length || 0;
+            document.getElementById('avgLength').textContent = results.track_statistics?.avg_length?.toFixed(1) || 0;
+            document.getElementById('medianLength').textContent = results.track_statistics?.median_length?.toFixed(1) || 0;
+            
+            // Advanced statistics (from testApp2 enhanced statistics)
+            if (results.advanced_statistics) {
+                document.getElementById('avgPathLength').textContent = results.advanced_statistics.avg_path_length?.toFixed(1) || '-';
+                document.getElementById('avgDuration').textContent = results.advanced_statistics.avg_duration?.toFixed(2) || '-';
+                document.getElementById('avgSpeed').textContent = results.advanced_statistics.avg_speed?.toFixed(1) || '-';
+            } else {
+                // Calculate from track_statistics if available
+                document.getElementById('avgPathLength').textContent = '-';
+                document.getElementById('avgDuration').textContent = '-';
+                document.getElementById('avgSpeed').textContent = '-';
+            }
+
+            // Vehicle Chart
+            const chartDiv = document.getElementById('vehicleChart');
+            chartDiv.innerHTML = '';
+
+            if (results.vehicle_types && Object.keys(results.vehicle_types).length > 0) {
+                const maxCount = Math.max(...Object.values(results.vehicle_types));
+                
+                for (const [type, count] of Object.entries(results.vehicle_types)) {
+                    const percentage = (count / maxCount) * 100;
+                    
+                    const barDiv = document.createElement('div');
+                    barDiv.className = 'vehicle-bar';
+                    barDiv.innerHTML = `
+                        <div class="vehicle-bar-label">
+                            <span><i class="fas fa-car"></i> ${type}</span>
+                            <span><strong>${count}</strong> مركبة</span>
+                        </div>
+                        <div class="vehicle-bar-fill" style="width: ${percentage}%">${count}</div>
+                    `;
+                    chartDiv.appendChild(barDiv);
+                }
+            }
+
+            // Direction Analysis
+            if (directionData && directionData.length > 0) {
+                document.getElementById('directionSection').style.display = 'block';
+                displayDirectionAnalysis(directionData);
+                
+                // Display direction-vehicle statistics if available
+                if (results.direction_vehicle_stats) {
+                    displayDirectionVehicleStats(results.direction_vehicle_stats);
+                }
+            }
+            
+            // Display filter statistics
+            if (results.filter_stats) {
+                displayFilterStats(results.filter_stats);
+            }
+
+            // Download Links
+            document.getElementById('downloadTotals').href = `/api/download/${files.totals}`;
+            document.getElementById('downloadStats').href = `/api/download/${files.track_statistics}`;
+        }
+
+        function displayDirectionVehicleStats(stats) {
+            const container = document.getElementById('directionVehicleStats');
+            
+            if (!stats || Object.keys(stats).length === 0) {
+                container.innerHTML = '';
+                return;
+            }
+            
+            // Get all unique vehicle types
+            const allVehicleTypes = new Set();
+            Object.values(stats).forEach(dirStats => {
+                Object.keys(dirStats).forEach(type => allVehicleTypes.add(type));
+            });
+            
+            // Create table
+            let html = `
+                <h4 style="margin: 20px 0 15px; color: var(--text-primary);"><i class="fas fa-table"></i> Vehicle Statistics by Direction</h4>
+                <div style="overflow-x: auto;">
+                    <table style="width: 100%; border-collapse: collapse; background: var(--bg-secondary); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                        <thead>
+                            <tr style="background: var(--bg-tertiary); color: var(--text-primary);">
+                                <th style="padding: 15px; text-align: left; border-left: 1px solid var(--border-color);">Direction</th>
+            `;
+            
+            // Add vehicle type columns
+            allVehicleTypes.forEach(type => {
+                const typeIcon = type === 'car' ? '🚗' : (type === 'bus' ? '🚌' : (type === 'truck' ? '🚚' : '🚙'));
+                html += `<th style="padding: 15px; text-align: center; border-left: 1px solid rgba(255,255,255,0.2);">${typeIcon} ${type}</th>`;
+            });
+            
+            html += `<th style="padding: 15px; text-align: center; background: rgba(255,255,255,0.1);">المجموع</th>
+                        </tr>
+                    </thead>
+                    <tbody>`;
+            
+            // Add rows for each direction
+            const directionOrder = ['شمال', 'شمال شرقي', 'شرق', 'جنوب شرقي', 'جنوب', 'جنوب غربي', 'غرب', 'شمال غربي'];
+            const sortedDirections = Object.keys(stats).sort((a, b) => {
+                const aIndex = directionOrder.indexOf(a);
+                const bIndex = directionOrder.indexOf(b);
+                if (aIndex === -1 && bIndex === -1) return a.localeCompare(b);
+                if (aIndex === -1) return 1;
+                if (bIndex === -1) return -1;
+                return aIndex - bIndex;
+            });
+            
+            sortedDirections.forEach((direction, index) => {
+                const dirStats = stats[direction];
+                const bgColor = index % 2 === 0 ? 'var(--bg-secondary)' : 'rgba(102, 126, 234, 0.08)';
+                const icon = getDirectionIcon(direction);
+                
+                let total = 0;
+                html += `<tr style="background: ${bgColor}; border-top: 1px solid var(--border-color);">
+                    <td style="padding: 12px; font-weight: bold; color: #667eea;">${icon} ${direction}</td>`;
+                
+                allVehicleTypes.forEach(type => {
+                    const count = dirStats[type] || 0;
+                    total += count;
+                    const displayCount = count > 0 ? count : '-';
+                    const color = count > 0 ? 'var(--text-primary)' : 'var(--text-muted)';
+                    html += `<td style="padding: 12px; text-align: center; color: ${color}; font-weight: ${count > 0 ? 'bold' : 'normal'};">${displayCount}</td>`;
+                });
+                
+                html += `<td style="padding: 12px; text-align: center; background: rgba(102, 126, 234, 0.15); font-weight: bold; color: #667eea;">${total}</td>
+                    </tr>`;
+            });
+            
+            // Add totals row
+            html += `<tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold;">
+                <td style="padding: 15px;">المجموع الكلي</td>`;
+            
+            let grandTotal = 0;
+            allVehicleTypes.forEach(type => {
+                let typeTotal = 0;
+                Object.values(stats).forEach(dirStats => {
+                    typeTotal += dirStats[type] || 0;
+                });
+                grandTotal += typeTotal;
+                html += `<td style="padding: 15px; text-align: center;">${typeTotal}</td>`;
+            });
+            
+            html += `<td style="padding: 15px; text-align: center; background: rgba(255,255,255,0.2);">${grandTotal}</td>
+                </tr>`;
+            
+            html += `</tbody></table></div>`;
+            
+            container.innerHTML = html;
+        }
+
+        function displayFilterStats(stats) {
+            const section = document.getElementById('filterStatsSection');
+            const container = document.getElementById('filterStatsContent');
+            
+            section.style.display = 'block';
+            
+            const totalOriginal = stats.passed + stats.too_short + stats.too_long + stats.no_movement + 
+                                 stats.large_jumps + stats.high_speed + stats.invalid_bbox + 
+                                 stats.large_gaps + stats.inconsistent_direction;
+            
+            const rejectedTotal = totalOriginal - stats.passed;
+            const passRate = totalOriginal > 0 ? ((stats.passed / totalOriginal) * 100).toFixed(1) : 0;
+            
+            let html = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 15px; margin-bottom: 20px;">
+                    <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+                        <div style="font-size: 0.9em; opacity: 0.9;">Total Tracks الأصلية</div>
+                        <div style="font-size: 2.5em; font-weight: bold; margin: 10px 0;">${totalOriginal}</div>
+                        <div style="font-size: 0.85em;">قبل الفلترة</div>
+                    </div>
+                    <div style="background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+                        <div style="font-size: 0.9em; opacity: 0.9;">✅ مسارات صالحة</div>
+                        <div style="font-size: 2.5em; font-weight: bold; margin: 10px 0;">${stats.passed}</div>
+                        <div style="font-size: 0.85em;">نسبة النجاح: ${passRate}%</div>
+                    </div>
+                    <div style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); padding: 20px; border-radius: 10px; color: white; text-align: center;">
+                        <div style="font-size: 0.9em; opacity: 0.9;">❌ مسارات مرفوضة</div>
+                        <div style="font-size: 2.5em; font-weight: bold; margin: 10px 0;">${rejectedTotal}</div>
+                        <div style="font-size: 0.85em;">تم تصفيتها</div>
+                    </div>
+                </div>
+                
+                <h4 style="margin: 25px 0 15px;"><i class="fas fa-exclamation-triangle"></i> أسباب رفض المسارات</h4>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px;">
+            `;
+            
+            const reasons = [
+                { name: 'قصيرة جداً', count: stats.too_short, icon: '📏', color: '#667eea' },
+                { name: 'طويلة جداً', count: stats.too_long, icon: '📐', color: '#764ba2' },
+                { name: 'بدون حركة', count: stats.no_movement, icon: '⏸️', color: '#fa709a' },
+                { name: 'قفزات كبيرة', count: stats.large_jumps, icon: '🚀', color: '#ff6b6b' },
+                { name: 'سرعة عالية', count: stats.high_speed, icon: '⚡', color: '#ffa502' },
+                { name: 'صندوق غير صالح', count: stats.invalid_bbox, icon: '📦', color: '#ff6348' },
+                { name: 'فجوات كبيرة', count: stats.large_gaps, icon: '⚠️', color: '#f39c12' },
+                { name: 'اتجاه غير مستقر', count: stats.inconsistent_direction, icon: '🔄', color: '#9b59b6' }
+            ];
+            
+            reasons.forEach(reason => {
+                if (reason.count > 0) {
+                    html += `
+                        <div style="background: var(--bg-secondary); padding: 15px; border-radius: 8px; border-left: 4px solid ${reason.color}; box-shadow: var(--shadow); border: 1px solid var(--border-color);">
+                            <div style="font-size: 1.5em; margin-bottom: 5px;">${reason.icon}</div>
+                            <div style="font-weight: bold; color: ${reason.color}; font-size: 1.2em;">${reason.count}</div>
+                            <div style="color: var(--text-muted); font-size: 0.85em; margin-top: 5px;">${reason.name}</div>
+                        </div>
+                    `;
+                }
+            });
+            
+            html += `</div>`;
+            
+            // Quality indicators
+            html += `
+                <div style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); padding: 20px; border-radius: 10px; margin-top: 20px; color: white;">
+                    <h4 style="margin: 0 0 15px 0;"><i class="fas fa-shield-alt"></i> مؤشرات جودة البيانات</h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 2em; font-weight: bold;">${passRate}%</div>
+                            <div style="font-size: 0.85em; opacity: 0.9;">نسبة النجاح</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 2em; font-weight: bold;">${stats.passed > 0 ? '✅' : '⚠️'}</div>
+                            <div style="font-size: 0.85em; opacity: 0.9;">${stats.passed > 0 ? 'بيانات جيدة' : 'بيانات ضعيفة'}</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 2em; font-weight: bold;">${rejectedTotal < stats.passed ? '🏆' : '⚠️'}</div>
+                            <div style="font-size: 0.85em; opacity: 0.9;">${rejectedTotal < stats.passed ? 'فلترة فعالة' : 'يحتاج تحسين'}</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            container.innerHTML = html;
+        }
+
+        function displayDirectionAnalysis(directionData) {
+            console.log('Direction data:', directionData);
+            
+            // Group by track_id
+            const trackDirections = {};
+            directionData.forEach(row => {
+                const trackId = row.track_id;
+                if (!trackDirections[trackId]) {
+                    trackDirections[trackId] = [];
+                }
+                trackDirections[trackId].push(row);
+            });
+
+            const totalTracks = Object.keys(trackDirections).length;
+            
+            // Count by status
+            let matchedCount = 0;
+            let unmatchedCount = 0;
+            Object.values(trackDirections).forEach(dirs => {
+                if (dirs[0].is_matched !== undefined) {
+                    if (dirs[0].is_matched) matchedCount++;
+                    else unmatchedCount++;
+                }
+            });
+            
+            // Display summary
+            const summaryDiv = document.getElementById('directionSummary');
+            let summaryHTML = `<p><strong>تم تحليل ${totalTracks} مسار</strong> وتحديد اتجاهاتهم</p>`;
+            
+            if (matchedCount > 0 || unmatchedCount > 0) {
+                summaryHTML += `
+                    <div style="display: flex; gap: 20px; margin-top: 15px;">
+                        <div style="background: #d4edda; padding: 15px; border-radius: 8px; flex: 1; border-right: 4px solid #28a745;">
+                            <strong style="color: #155724;">✅ متطابق مع الاتجاهات المتوقعة</strong>
+                            <h3 style="margin: 5px 0; color: #28a745;">${matchedCount} مسار</h3>
+                        </div>
+                        <div style="background: #f8d7da; padding: 15px; border-radius: 8px; flex: 1; border-right: 4px solid #dc3545;">
+                            <strong style="color: #721c24;">❌ غير متطابق (اتجاه خاطئ)</strong>
+                            <h3 style="margin: 5px 0; color: #dc3545;">${unmatchedCount} مسار</h3>
+                        </div>
+                    </div>
+                `;
+            }
+            
+            summaryDiv.innerHTML = summaryHTML;
+
+            // Display details
+            const detailsDiv = document.getElementById('directionDetails');
+            detailsDiv.innerHTML = '';
+
+            for (const [trackId, directions] of Object.entries(trackDirections)) {
+                const trackDiv = document.createElement('div');
+                const isMatched = directions[0].is_matched;
+                const borderColor = isMatched === true ? '#28a745' : (isMatched === false ? '#dc3545' : '#667eea');
+                const bgColor = isMatched === true ? 'rgba(40, 167, 69, 0.15)' : (isMatched === false ? 'rgba(220, 53, 69, 0.15)' : 'rgba(102, 126, 234, 0.1)');
+                
+                trackDiv.style.cssText = `background: ${bgColor}; padding: 15px; margin: 10px 0; border-radius: 10px; border-right: 4px solid ${borderColor}; color: var(--text-primary);`;
+                
+                const vehicleType = directions[0].vehicle_type || 'unknown';
+                const statusIcon = isMatched === true ? '✅' : (isMatched === false ? '❌' : '');
+                
+                let html = `<h4 style="color: var(--text-primary); margin-top: 0;">${statusIcon} <i class="fas fa-route"></i> المسار #${trackId} - ${vehicleType}</h4>`;
+                html += `<div style="margin-top: 10px;">`;
+                
+                directions.forEach((dir, index) => {
+                    const icon = getDirectionIcon(dir.direction);
+                    if (index === 0) {
+                        html += `<p style="color: var(--text-secondary); margin: 5px 0;">🚦 <strong>بدأ من:</strong> ${dir.direction} ${icon} (الframe ${dir.frame})</p>`;
+                    } else {
+                        const frameDiff = parseInt(dir.frame) - parseInt(directions[index-1].frame);
+                        html += `<p style="color: var(--text-secondary); margin: 5px 0;">↪️ <strong>ثم اتجه ${dir.direction}</strong> ${icon} بعد ${frameDiff} frame (الframe ${dir.frame})</p>`;
+                    }
+                });
+                
+                html += `</div>`;
+                trackDiv.innerHTML = html;
+                detailsDiv.appendChild(trackDiv);
+            }
+        }
+
+        function getDirectionIcon(direction) {
+            const icons = {
+                'شمال': '⬆️',
+                'جنوب': '⬇️',
+                'شرق': '➡️',
+                'غرب': '⬅️',
+                'شمال شرقي': '↗️',
+                'شمال غربي': '↖️',
+                'جنوب شرقي': '↘️',
+                'جنوب غربي': '↙️'
+            };
+            return icons[direction] || '➡️';
+        }
+
+        // Generate and Display Charts
+        async function generateAndDisplayCharts(analysisId) {
+            console.log('🎨 Generating charts for:', analysisId);
+            
+            try {
+                const response = await fetch('/api/analyze/generate_charts', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ analysis_id: analysisId })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.charts) {
+                    console.log('✅ Charts generated:', data.charts);
+                    displayCharts(data.charts);
+                } else {
+                    console.error('❌ Failed to generate charts:', data.error);
+                }
+            } catch (error) {
+                console.error('❌ Error generating charts:', error);
+            }
+        }
+
+        // Display Charts
+        function displayCharts(charts) {
+            const chartsSection = document.getElementById('chartsSection');
+            chartsSection.style.display = 'block';
+            
+            // Display each chart
+            if (charts.heatmap) {
+                const card = document.getElementById('heatmapCard');
+                const img = document.getElementById('heatmapImg');
+                img.src = `/api/download/${charts.heatmap}`;
+                card.style.display = 'block';
+            }
+            
+            if (charts.all_tracks) {
+                const card = document.getElementById('tracksCard');
+                const img = document.getElementById('tracksImg');
+                img.src = `/api/download/${charts.all_tracks}`;
+                card.style.display = 'block';
+            }
+            
+            if (charts.speed_histogram) {
+                const card = document.getElementById('speedCard');
+                const img = document.getElementById('speedImg');
+                img.src = `/api/download/${charts.speed_histogram}`;
+                card.style.display = 'block';
+            }
+            
+            if (charts.direction_chart) {
+                const card = document.getElementById('directionChartCard');
+                const img = document.getElementById('directionChartImg');
+                img.src = `/api/download/${charts.direction_chart}`;
+                card.style.display = 'block';
+            }
+            
+            if (charts.overview) {
+                const card = document.getElementById('overviewCard');
+                const img = document.getElementById('overviewImg');
+                img.src = `/api/download/${charts.overview}`;
+                card.style.display = 'block';
+            }
+            
+            console.log('✅ Charts displayed successfully');
+        }
+
+        // Image Modal Functions
+        function openImageModal(src) {
+            const modal = document.getElementById('imageModal');
+            const modalImg = document.getElementById('modalImg');
+            modal.style.display = 'block';
+            modalImg.src = src;
+        }
+
+        function closeImageModal() {
+            document.getElementById('imageModal').style.display = 'none';
+        }
+
+        // Download All Charts
+        async function downloadAllCharts() {
+            if (!currentAnalysisId) return;
+            
+            // Get all visible charts
+            const charts = [];
+            
+            const heatmapImg = document.getElementById('heatmapImg');
+            if (heatmapImg && heatmapImg.src) {
+                charts.push({ name: 'heatmap.png', src: heatmapImg.src });
+            }
+            
+            const tracksImg = document.getElementById('tracksImg');
+            if (tracksImg && tracksImg.src) {
+                charts.push({ name: 'all_tracks.png', src: tracksImg.src });
+            }
+            
+            const speedImg = document.getElementById('speedImg');
+            if (speedImg && speedImg.src) {
+                charts.push({ name: 'speed_histogram.png', src: speedImg.src });
+            }
+            
+            const directionImg = document.getElementById('directionChartImg');
+            if (directionImg && directionImg.src) {
+                charts.push({ name: 'direction_distribution.png', src: directionImg.src });
+            }
+            
+            const overviewImg = document.getElementById('overviewImg');
+            if (overviewImg && overviewImg.src) {
+                charts.push({ name: 'trajectory_overview.png', src: overviewImg.src });
+            }
+            
+            if (charts.length === 0) {
+                alert('لا توجد رسوم بيانية للتحميل');
+                return;
+            }
+            
+            // Download each chart
+            for (const chart of charts) {
+                try {
+                    const link = document.createElement('a');
+                    link.href = chart.src;
+                    link.download = chart.name;
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    await new Promise(resolve => setTimeout(resolve, 300)); // Small delay between downloads
+                } catch (error) {
+                    console.error('Error downloading chart:', chart.name, error);
+                }
+            }
+            
+            alert(`✅ تم تحميل ${charts.length} رسم بياني`);
+        }
+
+        // New Analysis
+        newAnalysisBtn.addEventListener('click', () => {
+            resetForm();
+        });
+
+        function resetForm() {
+            currentAnalysisId = null;
+            currentFiles = null;
+            uploadSection.style.display = 'block';
+            loadingSection.style.display = 'none';
+            resultsSection.style.display = 'none';
+            fileInfo.style.display = 'none';
+            uploadZone.style.display = 'block';
+            csvInput.value = '';
+            
+            // Hide charts
+            document.getElementById('chartsSection').style.display = 'none';
+            document.getElementById('heatmapCard').style.display = 'none';
+            document.getElementById('tracksCard').style.display = 'none';
+            document.getElementById('speedCard').style.display = 'none';
+            document.getElementById('directionChartCard').style.display = 'none';
+            document.getElementById('overviewCard').style.display = 'none';
+        }
+        
+        // Auto-load request data if request_id is provided
+        {% if request_id %}
+        async function saveToRequest() {
+            if (!confirm('Do you want to Save Results for Request #{{ request_id }}?')) return;
+            
+            try {
+                // Copy all generated charts to request results folder
+                const response = await fetch('/api/admin/save_analysis_to_request', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        request_id: {{ request_id }},
+                        analysis_id: currentAnalysisId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('✅ تم حفظ جميع النتائج بنجاح!\\n\\nسيتم الانتقال للوحة التحكم...');
+                    window.location.href = '/admin/dashboard';
+                } else {
+                    alert('خطأ: ' + data.error);
+                }
+            } catch (error) {
+                console.error('Error saving to request:', error);
+                alert('حدث خطأ في الحفظ');
+            }
+        }
+        
+        window.addEventListener('DOMContentLoaded', async function() {
+            try {
+                // Get request data
+                const response = await fetch('/api/request_status/{{ request_id }}');
+                const data = await response.json();
+                
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    return;
+                }
+                
+                // Auto-upload CSV
+                const csvPath = data.csv_path;
+                console.log('📊 CSV path from API:', csvPath);
+                
+                if (csvPath) {
+                    // Convert backslashes to forward slashes
+                    const normalizedCsvPath = csvPath.replace(/\\/g, '/');
+                    console.log('🔄 Normalized CSV path:', normalizedCsvPath);
+                    
+                    let csvRelative;
+                    if (normalizedCsvPath.includes('unified_output/')) {
+                        csvRelative = normalizedCsvPath.split('unified_output/')[1];
+                    } else {
+                        csvRelative = normalizedCsvPath;
+                    }
+                    console.log('📂 CSV relative path:', csvRelative);
+                    
+                    if (csvRelative) {
+                        // Fetch CSV and process
+                        const csvResponse = await fetch('/unified_output/' + csvRelative);
+                        const csvText = await csvResponse.text();
+                        
+                        // Create a File object
+                        const csvBlob = new Blob([csvText], { type: 'text/csv' });
+                        const csvFile = new File([csvBlob], 'tracks.csv', { type: 'text/csv' });
+                        
+                        // Simulate file input
+                        csvInput.files = null;
+                        
+                        // Process upload
+                        const formData = new FormData();
+                        formData.append('file', csvFile);
+                        
+                        uploadSection.style.display = 'none';
+                        loadingSection.style.display = 'block';
+                        
+                        const uploadResponse = await fetch('/api/analyze/upload', {
+                            method: 'POST',
+                            body: formData
+                        });
+                        
+                        const uploadData = await uploadResponse.json();
+                        
+                        if (uploadData.success) {
+                            currentAnalysisId = uploadData.analysis_id;
+                            
+                            // Process analysis automatically
+                            const analysisResponse = await fetch('/api/analyze/process', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ 
+                                    analysis_id: currentAnalysisId,
+                                    expected_directions: 'all'
+                                })
+                            });
+
+                            const analysisData = await analysisResponse.json();
+
+                            if (analysisData.success) {
+                                // Show results
+                                showResults(analysisData.analysis_results, analysisData.files, analysisData.direction_data || []);
+                                
+                                // Generate charts automatically
+                                await generateAndDisplayCharts(currentAnalysisId);
+                                
+                                // Store request_id for later
+                                window.currentRequestId = {{ request_id }};
+                                
+                                // Hide loading
+                                loadingSection.style.display = 'none';
+                                
+                                alert('✅ تم التحليل وتوليد الرسوم بنجاح!\\n\\nالآن اضغط "Save Results for Request #{{ request_id }}" لإكمال العملية');
+                            } else {
+                                alert('خطأ في التحليل: ' + analysisData.error);
+                                uploadSection.style.display = 'block';
+                                loadingSection.style.display = 'none';
+                            }
+                        } else {
+                            alert('خطأ في الرفع: ' + uploadData.error);
+                            uploadSection.style.display = 'block';
+                            loadingSection.style.display = 'none';
+                        }
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error loading request data:', error);
+                alert('Error loading request data');
+                uploadSection.style.display = 'block';
+                loadingSection.style.display = 'none';
+            }
+        });
+        {% endif %}
+    </script>
+</body>
+</html>

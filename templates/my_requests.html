@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Requests - Vehicle Tracking System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-car"></i>
+                    <h1>Vehicle Tracking System</h1>
+                </div>
+                <nav>
+                    <a href="/">
+                        <i class="fas fa-home"></i> Home
+                    </a>
+                    <a href="/request_analysis">
+                        <i class="fas fa-paper-plane"></i> Analysis Request</h2>
+                    </a>
+                    {% if session.role == 'admin' %}
+                    <a href="/admin/dashboard">
+                        <i class="fas fa-user-shield"></i> Admin Dashboard
+                    </a>
+                    {% endif %}
+                    <a href="/logout">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="container">
+            <div class="section">
+                <div class="section-header">
+                    <h2><i class="fas fa-list-alt"></i> My Analysis Requests</h2>
+                    <p>View and manage your submitted analysis requests</p>
+                </div>
+
+                <!-- Statistics -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <i class="fas fa-clock"></i>
+                        <div class="stat-value" id="pendingCount">0</div>
+                        <h3>Pending</h3>
+                    </div>
+                    <div class="stat-card">
+                        <i class="fas fa-spinner"></i>
+                        <div class="stat-value" id="processingCount">0</div>
+                        <h3>Processing</h3>
+                    </div>
+                    <div class="stat-card">
+                        <i class="fas fa-check-circle"></i>
+                        <div class="stat-value" id="completedCount">0</div>
+                        <h3>Completed</h3>
+                    </div>
+                </div>
+
+                <!-- Filter Buttons -->
+                <div style="margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap;">
+                    <button class="btn btn-secondary filter-btn active" data-filter="all">
+                        <i class="fas fa-list"></i> All
+                    </button>
+                    <button class="btn btn-secondary filter-btn" data-filter="pending">
+                        <i class="fas fa-clock"></i> Pending
+                    </button>
+                    <button class="btn btn-secondary filter-btn" data-filter="processing">
+                        <i class="fas fa-spinner"></i> Processing
+                    </button>
+                    <button class="btn btn-secondary filter-btn" data-filter="completed">
+                        <i class="fas fa-check-circle"></i> Completed
+                    </button>
+                </div>
+
+                <!-- Requests Table -->
+                <div style="overflow-x: auto;">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Request ID</th>
+                                <th>Submit Date</th>
+                                <th>CSV File</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="requestsTableBody">
+                            <tr>
+                                <td colspan="5" style="text-align: center; padding: 40px;">
+                                    <i class="fas fa-spinner fa-spin" style="font-size: 2rem; color: var(--accent-primary);"></i>
+                                    <p style="margin-top: 10px; color: var(--text-muted);">Loading requests...</p>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let allRequests = [];
+        let currentFilter = 'all';
+
+        // Load requests on page load
+        window.addEventListener('DOMContentLoaded', loadRequests);
+
+        async function loadRequests() {
+            try {
+                const response = await fetch('/api/my_requests');
+                const data = await response.json();
+                
+                allRequests = data.requests || [];
+                updateStats();
+                renderRequests();
+            } catch (error) {
+                console.error('Error loading requests:', error);
+                document.getElementById('requestsTableBody').innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 40px; color: var(--accent-danger);">
+                            <i class="fas fa-exclamation-triangle" style="font-size: 2rem;"></i>
+                            <p style="margin-top: 10px;">Error loading requests</p>
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        function updateStats() {
+            const pending = allRequests.filter(r => r.status === 'pending').length;
+            const processing = allRequests.filter(r => r.status === 'processing').length;
+            const completed = allRequests.filter(r => r.status === 'completed').length;
+
+            document.getElementById('pendingCount').textContent = pending;
+            document.getElementById('processingCount').textContent = processing;
+            document.getElementById('completedCount').textContent = completed;
+        }
+
+        function renderRequests() {
+            const tbody = document.getElementById('requestsTableBody');
+            
+            let filtered = allRequests;
+            if (currentFilter !== 'all') {
+                filtered = allRequests.filter(r => r.status === currentFilter);
+            }
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="text-align: center; padding: 60px;">
+                            <i class="fas fa-inbox" style="font-size: 3rem; color: var(--text-muted); opacity: 0.5;"></i>
+                            <h3 style="margin-top: 20px; color: var(--text-primary);">No Requests Found</h3>
+                            <p style="color: var(--text-muted);">You haven't submitted any ${currentFilter === 'all' ? '' : currentFilter} analysis requests yet</p>
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(req => {
+                const statusClass = {
+                    'pending': 'badge-pending',
+                    'processing': 'badge-processing',
+                    'completed': 'badge-completed'
+                }[req.status] || 'badge-pending';
+
+                const statusText = {
+                    'pending': 'Pending',
+                    'processing': 'Processing',
+                    'completed': 'Completed'
+                }[req.status] || req.status;
+
+                const createdDate = new Date(req.created_at).toLocaleString('en-US');
+                const csvName = req.csv_path ? req.csv_path.split('\\').pop().split('/').pop() : 'N/A';
+
+                return `
+                    <tr>
+                        <td><strong>#${req.id}</strong></td>
+                        <td>${createdDate}</td>
+                        <td>${csvName}</td>
+                        <td><span class="badge ${statusClass}">${statusText}</span></td>
+                        <td>
+                            <a href="/request_analysis?request_id=${req.id}" class="btn btn-primary" style="padding: 8px 16px; font-size: 0.9rem;">
+                                <i class="fas fa-eye"></i> View
+                            </a>
+                            ${req.status === 'pending' ? `
+                                <button onclick="processManuallyFromRequests(${req.id})" class="btn btn-success" style="padding: 8px 16px; font-size: 0.9rem; margin-left: 5px; background: #28a745;">
+                                    <i class="fas fa-cogs"></i> Process Manually
+                                </button>
+                            ` : ''}
+                            <button onclick="deleteRequest(${req.id})" class="btn btn-danger" style="padding: 8px 16px; font-size: 0.9rem; margin-left: 5px; background: #dc3545;">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Filter buttons
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                currentFilter = btn.dataset.filter;
+                renderRequests();
+            });
+        });
+
+        // Delete request function
+        async function deleteRequest(requestId) {
+            if (!confirm('Are you sure you want to delete this request? This action cannot be undone.')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/my_requests/${requestId}`, {
+                    method: 'DELETE',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    alert('✅ Request deleted successfully');
+                    loadRequests(); // Reload the requests list
+                } else {
+                    alert('Error: ' + (data.error || 'Failed to delete request'));
+                }
+            } catch (error) {
+                console.error('Error deleting request:', error);
+                alert('Error occurred while deleting the request');
+            }
+        }
+
+        // Open pending request for manual processing (from My Requests list)
+        function processManuallyFromRequests(requestId) {
+            if (!requestId) return;
+            if (!confirm('Open request #' + requestId + ' for manual processing?')) return;
+            // Redirect to the user-facing line drawing view where the user can process the request
+            window.location.href = `/user/line_drawing?request_id=${requestId}`;
+        }
+
+        // Auto-refresh every 10 seconds
+        setInterval(loadRequests, 10000);
+    </script>
+</body>
+</html>

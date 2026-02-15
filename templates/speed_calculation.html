@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Speed Calculation - Vehicle Counting System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .distance-matrix {
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: var(--shadow);
+            margin: 20px 0;
+        }
+
+        .matrix-title {
+            text-align: center;
+            color: var(--accent-primary);
+            margin-bottom: 30px;
+            font-size: 1.3em;
+            font-weight: bold;
+        }
+
+        .matrix-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-tertiary);
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .matrix-table th,
+        .matrix-table td {
+            padding: 15px;
+            text-align: center;
+            border: 1px solid #667eea;
+            color: var(--text-primary);
+        }
+
+        .matrix-table th {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-weight: bold;
+        }
+
+        .matrix-table tr:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .matrix-table input {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #667eea;
+            border-radius: 5px;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            text-align: center;
+            font-size: 16px;
+        }
+
+        .matrix-table input:focus {
+            outline: none;
+            border-color: #764ba2;
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.3);
+        }
+
+        .matrix-table input::placeholder {
+            color: #999;
+        }
+
+        .info-box {
+            background: rgba(102, 126, 234, 0.1);
+            border-left: 4px solid #667eea;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            color: var(--text-primary);
+        }
+
+        .info-box strong {
+            color: #667eea;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            margin-top: 30px;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 12px 30px;
+            border-radius: 8px;
+            border: none;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            border: 2px solid #667eea;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .results-section {
+            display: none;
+            background: var(--bg-secondary);
+            padding: 30px;
+            border-radius: 15px;
+            margin-top: 30px;
+            box-shadow: var(--shadow);
+        }
+
+        .results-section.show {
+            display: block;
+        }
+
+        .stat-card {
+            background: var(--bg-tertiary);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            border-left: 4px solid #667eea;
+        }
+
+        .stat-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #667eea;
+            margin: 10px 0;
+        }
+
+        .stat-label {
+            color: #999;
+            font-size: 0.9em;
+        }
+
+        .download-button {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 5px;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 15px;
+        }
+
+        .download-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.4);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .loading.show {
+            display: block;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+        }
+
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 10px 20px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 8px;
+            transition: all 0.3s;
+        }
+
+        .nav-links a:hover {
+            background: rgba(255,255,255,0.2);
+        }
+    </style>
+</head>
+<body>
+<header class="header">
+    <div class="container">
+        <div class="header-content">
+            <div class="logo">
+                <i class="fas fa-tachometer-alt"></i>
+                <h1>Vehicle Speed Calculation</h1>
+            </div>
+
+            <nav class="nav-links">
+                <a href="/admin/dashboard"><i class="fas fa-user-shield"></i> Admin Dashboard</a>
+                <a href="/logout"><i class="fas fa-sign-out-alt"></i> Logout</a>
+            </nav>
+        </div>
+    </div>
+</header>
+
+<main class="main-content">
+    <div class="container">
+        <!-- Step 1: Distance Matrix Input -->
+        <section class="distance-matrix">
+            <div class="matrix-title">
+                <i class="fas fa-ruler"></i> Enter Distance Between Legs (Meters)
+            </div>
+
+            <div class="info-box">
+                <i class="fas fa-info-circle"></i>
+                <strong>Instructions:</strong> Enter the real-world distance (in meters) between each pair of Legs.
+                You can even enter the distance for the same Leg (e.g., North to North).
+            </div>
+
+            <table class="matrix-table">
+                <thead>
+                    <tr>
+                        <th>From / To</th>
+                        {% for leg_name in leg_names %}
+                        <th>{{ leg_name }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody id="matrixBody">
+                    <!-- Generated by JavaScript -->
+                </tbody>
+            </table>
+
+            <div class="action-buttons">
+                <button class="btn btn-secondary" onclick="history.back()">
+                    Back 
+                </button>
+                <button class="btn btn-primary" onclick="calculateSpeed()">
+                    Calculate Speed <i class="fas fa-calculator"></i>
+                </button>
+            </div>
+        </section>
+
+        <!-- Loading Spinner -->
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Calculating vehicle speed...</p>
+        </div>
+
+        <!-- Results Section -->
+        <section id="resultsSection" class="results-section">
+            <div class="matrix-title">
+                <i class="fas fa-check-circle"></i> Speed Calculation Results
+            </div>
+
+            <div id="resultsContent">
+                <!-- Generated by JavaScript -->
+            </div>
+
+            <div style="text-align: center;">
+                <a id="downloadLink" href="#" class="download-button">
+                    <i class="fas fa-download"></i> Download Vehicle Speeds (CSV)
+                </a>
+            </div>
+        </section>
+    </div>
+</main>
+
+<footer class="footer">
+    <div class="container">
+        <p>&copy; 2026 Advanced Vehicle Tracking System - Speed Calculation</p>
+    </div>
+</footer>
+
+
+    <script>
+        // Get parameters from URL
+        const urlParams = new URLSearchParams(window.location.search);
+        const analysisId = urlParams.get('analysis_id');
+        const requestId = urlParams.get('request_id');
+        const legNames = JSON.parse(decodeURIComponent(urlParams.get('leg_names') || '[]'));
+
+        console.log('Analysis ID:', analysisId);
+        console.log('Request ID:', requestId);
+        console.log('Leg names:', legNames);
+
+        // Generate matrix input table
+        function generateMatrix() {
+            const tbody = document.getElementById('matrixBody');
+            tbody.innerHTML = '';
+
+            for (let i = 0; i < legNames.length; i++) {
+                const tr = document.createElement('tr');
+                
+                // First column: leg name (from)
+                let td = document.createElement('td');
+                td.style.fontWeight = 'bold';
+                td.style.background = 'rgba(102, 126, 234, 0.1)';
+                td.textContent = legNames[i];
+                tr.appendChild(td);
+
+                // Data columns - ALL CELLS now have input fields
+                for (let j = 0; j < legNames.length; j++) {
+                    td = document.createElement('td');
+                    const input = document.createElement('input');
+                    input.type = 'number';
+                    input.id = `dist_${i}_${j}`;
+                    input.placeholder = '0.0';
+                    input.min = '0';
+                    input.step = '0.1';
+                    td.appendChild(input);
+                    tr.appendChild(td);
+                }
+
+                tbody.appendChild(tr);
+            }
+        }
+
+        // Calculate speed
+        async function calculateSpeed() {
+            try {
+                // Validate inputs
+                const distanceMatrix = {};
+                let hasAnyDistance = false;
+
+                for (let i = 0; i < legNames.length; i++) {
+                    for (let j = 0; j < legNames.length; j++) {
+                        const input = document.getElementById(`dist_${i}_${j}`);
+                        const value = parseFloat(input.value);
+
+                        if (input.value.trim() === '') {
+                            continue; // Skip empty fields
+                        }
+
+                        if (isNaN(value) || value < 0) {
+                            alert(`⚠️ Error: Invalid distance: ${legNames[i]} → ${legNames[j]}`);
+                            return;
+                        }
+
+                        // Store as 1-indexed (legs are numbered 1, 2, 3...)
+                        distanceMatrix[`${i + 1},${j + 1}`] = value;
+                        hasAnyDistance = true;
+                    }
+                }
+
+                if (!hasAnyDistance) {
+                    alert('⚠️ Please enter at least one distance');
+                    return;
+                }
+
+                // Show loading
+                document.getElementById('loading').classList.add('show');
+
+                // Send to server
+                const response = await fetch('/api/line_drawing/speed_analysis', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        analysis_id: analysisId,
+                        request_id: requestId,
+                        distance_matrix: distanceMatrix
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showResults(data.speed_stats, data.speed_file);
+                } else {
+                    alert(' Error ❌: ' + data.error);
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Error in speed calculation ❌: ' + error.message);
+            } finally {
+                document.getElementById('loading').classList.remove('show');
+            }
+        }
+
+        function showResults(stats, speedFile) {
+            const resultsContent = document.getElementById('resultsContent');
+            resultsContent.innerHTML = '';
+
+            if (stats && stats.total_vehicles_with_speed > 0) {
+                let html = `
+                            <div class="stat-card">
+                                <div class="stat-label">Total Vehicles with Speed Data</div>
+                                <div class="stat-value">${stats.total_vehicles_with_speed}</div>
+                            </div>
+
+                            <div class="stat-card">
+                                <div class="stat-label">Average Speed</div>
+                                <div class="stat-value">${stats.avg_speed_kmh.toFixed(2)} km/h</div>
+                            </div>
+
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                                <div class="stat-card">
+                                    <div class="stat-label">Maximum Speed</div>
+                                    <div class="stat-value" style="color: #dc3545;">${stats.max_speed_kmh.toFixed(2)} km/h</div>
+                                </div>
+
+                                <div class="stat-card">
+                                    <div class="stat-label">Minimum Speed</div>
+                                    <div class="stat-value" style="color: #28a745;">${stats.min_speed_kmh.toFixed(2)} km/h</div>
+                                </div>
+                            </div>
+
+                `;
+
+                resultsContent.innerHTML = html;
+            } else {
+                resultsContent.innerHTML = '<p style="color: #999;">No vehicles with valid speed data found</p>';
+            }
+
+            // Set download link
+            if (speedFile) {
+                const downloadLink = document.getElementById('downloadLink');
+                downloadLink.href = `/api/download/${speedFile}`;
+                downloadLink.style.display = 'inline-flex';
+            }
+
+            // Show results
+            document.getElementById('resultsSection').classList.add('show');
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!analysisId && !requestId) {
+                alert('❌ Analysis or Request ID is missing');
+                window.location.href = '/admin/dashboard';
+                return;
+            }
+
+            // Update page title
+            document.title = `Speed Calculation - ${legNames.length} Legs`;
+
+            // Generate matrix
+            generateMatrix();
+
+            console.log('✅ Speed calculation page loaded successfully');
+        });
+    </script>
+</body>
+</html>

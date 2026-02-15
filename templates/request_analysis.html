@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Request Analysis - Vehicle Tracking System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+
+
+        .card {
+            background: var(--bg-card);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: var(--shadow-lg);
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+        }
+
+        .card-header {
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+
+        .card-header h2 {
+            color: var(--accent-primary);
+            font-size: 24px;
+            margin: 0;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .form-group input[type="file"] {
+            display: block;
+            width: 100%;
+            padding: 12px;
+            border: 2px dashed #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .form-group input[type="file"]:hover {
+            border-color: #764ba2;
+        }
+
+        .file-preview {
+            margin-top: 10px;
+            padding: 10px;
+            background: var(--bg-tertiary);
+            border-radius: 5px;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        .frames-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .frame-preview {
+            text-align: center;
+        }
+
+        .frame-preview img {
+            width: 100%;
+            height: 150px;
+            object-fit: cover;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+        }
+
+        .frame-preview p {
+            margin-top: 8px;
+            font-size: 13px;
+            color: var(--text-muted);
+        }
+
+        .btn {
+            padding: 14px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .status-box {
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 20px;
+            text-align: center;
+        }
+
+        .status-pending {
+            background: #fff3cd;
+            border: 2px solid #ffc107;
+            color: #856404;
+        }
+
+        .status-processing {
+            background: #d1ecf1;
+            border: 2px solid #17a2b8;
+            color: #0c5460;
+        }
+
+        .status-completed {
+            background: #d4edda;
+            border: 2px solid #28a745;
+            color: #155724;
+        }
+
+        .status-icon {
+            font-size: 48px;
+            margin-bottom: 15px;
+        }
+
+        .results-section {
+            margin-top: 30px;
+        }
+
+        .download-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .download-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .download-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 35px rgba(102, 126, 234, 0.4);
+        }
+
+        .download-card i {
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+
+        .download-card h4 {
+            margin: 10px 0;
+            font-size: 16px;
+        }
+
+        .admin-note {
+            background: var(--bg-tertiary);
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid var(--accent-primary);
+            margin-top: 15px;
+        }
+
+        .admin-note h4 {
+            color: var(--accent-primary);
+            margin-bottom: 10px;
+        }
+
+        .admin-note p {
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+        
+        .chart-box {
+            background: var(--bg-secondary);
+            padding: 15px;
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+        }
+        
+        .chart-box h4 {
+            color: var(--accent-primary);
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .chart-box img {
+            width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo">
+                    <i class="fas fa-car"></i>
+                    <h1>Vehicle Tracking System</h1>
+                </div>
+                <nav>
+                    <a href="/">
+                        <i class="fas fa-home"></i> Home
+                    </a>
+                    <a href="/my_requests">
+                        <i class="fas fa-list-alt"></i> My Requests
+                    </a>
+                    <a href="/logout">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-content">
+        <div class="request-container container">
+            <!-- Upload Form -->
+            <div class="card" id="uploadCard">
+                <div class="card-header">
+                    <h2><i class="fas fa-paper-plane"></i> Submit Analysis Request</h2>
+                </div>
+
+                <form id="analysisRequestForm" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label><i class="fas fa-file-csv"></i> Tracks.csv File</label>
+                        <input type="file" id="csvFile" name="csv_file" accept=".csv" required>
+                        <div class="file-preview" id="csvPreview" style="display: none;">
+                            <i class="fas fa-check-circle" style="color: #28a745;"></i>
+                            <span id="csvFileName"></span>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label><i class="fas fa-images"></i> Three Frames</label>
+                        <input type="file" id="frame1" name="frame1" accept="image/*" required>
+                        <input type="file" id="frame2" name="frame2" accept="image/*" required style="margin-top: 10px;">
+                        <input type="file" id="frame3" name="frame3" accept="image/*" required style="margin-top: 10px;">
+                        
+                        <div class="frames-grid" id="framesPreview" style="display: none;">
+                            <div class="frame-preview">
+                                <img id="preview1" alt="Frame 1">
+                                <p>Frame 1</p>
+                            </div>
+                            <div class="frame-preview">
+                                <img id="preview2" alt="Frame 2">
+                                <p>Frame 2</p>
+                            </div>
+                            <div class="frame-preview">
+                                <img id="preview3" alt="Frame 3">
+                                <p>Frame 3</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" id="submitBtn">
+                        <i class="fas fa-paper-plane"></i> Submit Request
+                    </button>
+                </form>
+            </div>
+
+            <!-- Status Card -->
+            <div class="card" id="statusCard" style="display: none;">
+                <div class="card-header">
+                    <h2><i class="fas fa-info-circle"></i> Request Status</h2>
+                </div>
+
+                <div id="statusContent">
+                    <!-- Will be populated dynamically -->
+                </div>
+            </div>
+
+            <!-- Results Card -->
+            <div class="card" id="resultsCard" style="display: none;">
+                <div class="card-header">
+                    <h2><i class="fas fa-chart-bar"></i> Analysis Results</h2>
+                </div>
+
+                <div class="results-section" id="resultsContent">
+                    <!-- Will be populated with results -->
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // File preview handlers
+        document.getElementById('csvFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                document.getElementById('csvPreview').style.display = 'block';
+                document.getElementById('csvFileName').textContent = file.name;
+            }
+        });
+
+        // Frame previews
+        ['frame1', 'frame2', 'frame3'].forEach((id, index) => {
+            document.getElementById(id).addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        document.getElementById(`preview${index + 1}`).src = e.target.result;
+                        document.getElementById('framesPreview').style.display = 'grid';
+                    };
+                    reader.readAsDataURL(file);
+                }
+            });
+        });
+
+        // Form submission
+        document.getElementById('analysisRequestForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const submitBtn = document.getElementById('submitBtn');
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+
+            const formData = new FormData(this);
+            
+            try {
+                const response = await fetch('/api/request_analysis', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('uploadCard').style.display = 'none';
+                    showStatus(data.request_id);
+                } else {
+                    alert('Error: ' + data.error);
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+                }
+            } catch (error) {
+                alert('Error occurred while sending request');
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit Request';
+            }
+        });
+
+        async function showStatus(requestId) {
+            document.getElementById('statusCard').style.display = 'block';
+            
+            // Poll for status updates
+            const interval = setInterval(async () => {
+                const response = await fetch(`/api/request_status/${requestId}`);
+                const data = await response.json();
+
+                updateStatusDisplay(data);
+
+                if (data.status === 'completed') {
+                    clearInterval(interval);
+                    showResults(data);
+                }
+            }, 3000); // Check every 3 seconds
+        }
+
+        function updateStatusDisplay(data) {
+            let statusClass = 'status-pending';
+            let icon = 'fa-clock';
+            let message = 'Awaiting Processing';
+
+            if (data.status === 'processing') {
+                statusClass = 'status-processing';
+                icon = 'fa-spinner fa-spin';
+                message = 'Analyzing...';
+            } else if (data.status === 'completed') {
+                statusClass = 'status-completed';
+                icon = 'fa-check-circle';
+                message = 'Analysis Complete!';
+            }
+
+            document.getElementById('statusContent').innerHTML = `
+                <div class="status-box ${statusClass}">
+                    <div class="status-icon"><i class="fas ${icon}"></i></div>
+                    <h3>${message}</h3>
+                    <p>Submitted: ${new Date(data.created_at).toLocaleString('en-US')}</p>
+                </div>
+            `;
+        }
+
+        function showResults(data) {
+            document.getElementById('resultsCard').style.display = 'block';
+            
+            let html = '';
+            
+            // Display charts if available
+            if (data.results) {
+                html += '<div class="charts-container" style="margin-bottom: 30px;">';
+                html += '<h3 style="margin-bottom: 20px; color: #667eea;">Visual Analysis</h3>';
+                html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 20px;">';
+                
+                if (data.results.heatmap) {
+                    html += `
+                        <div class="chart-box">
+                            <h4>Heatmap</h4>
+                            <img src="${data.results.heatmap}" alt="Heatmap" style="width: 100%; border-radius: 8px;">
+                        </div>
+                    `;
+                }
+                
+                if (data.results.tracks) {
+                    html += `
+                        <div class="chart-box">
+                            <h4>Vehicle Tracks</h4>
+                            <img src="${data.results.tracks}" alt="Tracks" style="width: 100%; border-radius: 8px;">
+                        </div>
+                    `;
+                }
+                
+                if (data.results.speed) {
+                    html += `
+                        <div class="chart-box">
+                            <h4>Speed Distribution</h4>
+                            <img src="${data.results.speed}" alt="Speed" style="width: 100%; border-radius: 8px;">
+                        </div>
+                    `;
+                }
+                
+                if (data.results.direction) {
+                    html += `
+                        <div class="chart-box">
+                            <h4>Direction Distribution</h4>
+                            <img src="${data.results.direction}" alt="Direction" style="width: 100%; border-radius: 8px;">
+                        </div>
+                    `;
+                }
+                
+                html += '</div></div>';
+            }
+            
+            // Download links
+            html += '<div class="download-section" style="margin-bottom: 30px;">';
+            html += '<h3 style="margin-bottom: 15px; color: #667eea;">Download Files</h3>';
+            html += '<div class="download-grid">';
+            
+            // Download all as ZIP
+            html += `
+                <a href="/api/download_results/${data.id}" class="download-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+                    <i class="fas fa-file-archive"></i>
+                    <h4>Download All (ZIP)</h4>
+                    <p style="font-size: 14px; opacity: 0.9;">All results and images</p>
+                </a>
+            `;
+            
+            if (data.csv_path) {
+                const csvRelative = data.csv_path.replace(/\\\\/g, '/').split('unified_output/')[1];
+                if (csvRelative) {
+                    html += `
+                        <a href="/unified_output/${csvRelative}" class="download-card" download>
+                            <i class="fas fa-file-csv"></i>
+                            <h4>CSV File</h4>
+                            <p style="font-size: 14px; opacity: 0.9;">Tracking data</p>
+                        </a>
+                    `;
+                }
+            }
+            
+            html += '</div></div>';
+
+            // Admin notes
+            if (data.admin_notes) {
+                html += `
+                    <div class="admin-note" style="background: #f8f9ff; border: 2px solid #667eea; border-radius: 10px; padding: 20px; margin-top: 20px;">
+                        <h4 style="color: #667eea; margin-bottom: 10px;"><i class="fas fa-comment-alt"></i> Admin Notes</h4>
+                        <p style="color: #333; line-height: 1.6;">${data.admin_notes}</p>
+                    </div>
+                `;
+            }
+
+            document.getElementById('resultsContent').innerHTML = html;
+        }
+
+        // Check if there's an existing request on page load
+        window.addEventListener('DOMContentLoaded', async function() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const requestId = urlParams.get('request_id');
+            
+            if (requestId) {
+                // User came from auto-submit, show status directly
+                document.getElementById('uploadCard').style.display = 'none';
+                showStatus(requestId);
+                return;
+            }
+            
+            const analysisId = urlParams.get('analysis_id');
+            
+            if (analysisId) {
+                // Check if user already has a pending request for this analysis
+                const response = await fetch(`/api/check_existing_request?analysis_id=${analysisId}`);
+                const data = await response.json();
+                
+                if (data.exists) {
+                    document.getElementById('uploadCard').style.display = 'none';
+                    showStatus(data.request_id);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
