@@ -103,6 +103,22 @@
                     <h3><i class="fas fa-video"></i> Video Preview</h3>
                     <video id="previewVideo" controls></video>
                     <div class="video-info" id="videoInfo"></div>
+
+                    <!-- Preview notice shown when the browser cannot play the uploaded video (simplified English) -->
+                    <div id="previewNotice" style="display:none; margin-top:12px; padding:12px; border-radius:8px; background:#1b2028; color:#ffd480; font-size:13px;">
+                        <div style="display:flex; gap:12px; align-items:flex-start;">
+                            <div style="flex:1;">
+                                <strong>File not supported by your browser</strong>
+                                <div id="previewNoticeText" style="margin-top:6px; color:#e6e6e6; font-size:13px;"></div>
+                                <pre id="previewFixCmd" style="display:none; margin-top:8px; background:#0b1220; color:#cbd5e1; padding:8px; border-radius:6px; font-size:12px; overflow:auto;"></pre>
+                                <div style="margin-top:8px; display:flex; gap:8px; align-items:center;">
+                                    <button id="previewTranscodeBtn" class="btn" style="display:none; background:#28a745; color:white;">Transcode on server</button>
+                                    <button id="previewNoticeDismiss" class="btn">Close</button>
+                                    <span style="margin-left:8px; color:#9aa6b2; font-size:12px;">Tip: convert to MP4 (H.264/AAC) if possible.</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </section>
 

@@ -88,6 +88,22 @@ document.addEventListener('DOMContentLoaded', () => {
     loadHistory();
     setupEventListeners();
 
+    // Attach preview transcode button handler (if present)
+    try {
+        const transcodeBtn = document.getElementById('previewTranscodeBtn');
+        if (transcodeBtn && !transcodeBtn._hasHandler) {
+            transcodeBtn.addEventListener('click', transcodeUploadedFile);
+            transcodeBtn._hasHandler = true;
+        }
+    } catch (e) { console.warn('Could not attach previewTranscodeBtn handler', e); }
+
+    // Keep ROI player synchronized whenever the preview's metadata becomes available
+    try {
+        previewVideo.addEventListener('loadedmetadata', () => {
+            try { syncROIVideoWithPreview(); } catch (e) { /* ignore */ }
+        });
+    } catch (e) { /* ignore if previewVideo not present yet */ }
+
     // Ensure the "Show Low-Confidence Tracks" button always has a handler (defensive)
     try {
         const showBtn = document.getElementById('showLowConfBtn');
@@ -302,17 +318,18 @@ async function handleFile(file) {
             if (xhr.status === 200) {
                 const response = JSON.parse(xhr.responseText);
                 currentVideoPath = response.filepath;
-                
+                window.currentUploadedFilename = response.filename || null; // used by server-transcode action
+
                 // Show video preview
                 showVideoPreview(file);
-                
+
                 // Show config section
                 configSection.style.display = 'block';
                 // Apply recommendations/thresholds again now that config is visible
                 try { updateModelRecommendation(); } catch (e) { console.warn('updateModelRecommendation on upload failed', e); }
                 try { updateConfidenceThreshold(); } catch (e) { console.warn('updateConfidenceThreshold on upload failed', e); }
                 configSection.scrollIntoView({ behavior: 'smooth' });
-                
+
                 uploadProgressText.textContent = 'Upload successful!';
             } else {
                 alert('Video upload failed. Please try again.');
@@ -338,19 +355,36 @@ function showVideoPreview(file) {
     const url = URL.createObjectURL(file);
     previewVideo.src = url;
     videoPreview.style.display = 'block';
-    
+    hidePreviewNotice();
+
+    // If the browser cannot load playable metadata or the file is audio-only,
+    // show a clear Arabic message explaining possible causes and solutions.
+    previewVideo.onerror = () => {
+        showPreviewUnsupportedNotice(
+            'The browser cannot play this file. Common causes: unsupported codec/container, audio-only file, or a corrupted file.',
+            true
+        );
+    };
+
     previewVideo.onloadedmetadata = () => {
+        // audio-only or missing visual track
+        if (!previewVideo.videoWidth || !previewVideo.videoHeight) {
+            showPreviewUnsupportedNotice(
+                'The file contains no visible video track (audio-only) or the video codec/container is not supported by your browser.',
+                true
+            );
+            // still reveal ROI area so user can proceed with placeholder-based flow if desired
+            document.getElementById('roiSection').style.display = 'block';
+            return;
+        }
+
+        // normal successful metadata load
         const duration = previewVideo.duration;
-        
-        // حساب الساعات والدقائق والثواني
         const hours = Math.floor(duration / 3600);
         const minutes = Math.floor((duration % 3600) / 60);
         const seconds = Math.floor(duration % 60);
-        
-        // تنسيق الوقت ليعرض الساعات والدقائق والثواني
         const formattedTime = `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
-        
-        // تغيير التنسيق ليكون المحتوى بجانب بعض وفي المنتصف
+
         videoInfo.innerHTML = `
             <div style="display: flex; gap: 15px; justify-content: center; flex-wrap: wrap; text-align: center;">
                 <span><strong>Filename:</strong> ${file.name}</span>
@@ -358,10 +392,146 @@ function showVideoPreview(file) {
                 <span><strong>Duration:</strong> ${formattedTime}</span>
             </div>
         `;
-        
-        // عرض section الـ ROI بعد اختيار الفيديو
+
+        // Keep ROI in sync with the actual playable preview source so drawing works after server transcode
+        try {
+            syncROIVideoWithPreview();
+        } catch (e) { console.warn('Failed to sync roiVideo with preview:', e); }
+
         document.getElementById('roiSection').style.display = 'block';
     };
+
+    // Defensive: if playback starts but no visual frames, show notice
+    previewVideo.onplay = () => {
+        setTimeout(() => {
+            if (!previewVideo.videoWidth || !previewVideo.videoHeight) {
+                showPreviewUnsupportedNotice('Playback started but no visible frames were produced — file may be audio-only or codec unsupported.', true);
+            }
+        }, 250);
+    };
+}
+
+// Show/hide preview unsupported notice helpers
+function showPreviewUnsupportedNotice(message, showFixCmd=false) {
+    const notice = document.getElementById('previewNotice');
+    const text = document.getElementById('previewNoticeText');
+    const cmd = document.getElementById('previewFixCmd');
+    if (!notice || !text) return;
+    text.textContent = message + ' \n\nRecommended fix:';
+    if (showFixCmd && cmd) {
+        // do not show raw ffmpeg command here
+        cmd.style.display = 'none';
+    }
+    // show server-convert button if we have an uploaded filename
+    const transBtn = document.getElementById('previewTranscodeBtn');
+    if (transBtn) {
+        transBtn.style.display = (window.currentUploadedFilename ? 'inline-flex' : 'none');
+        transBtn.disabled = false;
+        transBtn.textContent = 'Transcode on server';
+    }
+    notice.style.display = 'block';
+}
+
+function hidePreviewNotice() {
+    const notice = document.getElementById('previewNotice');
+    const cmd = document.getElementById('previewFixCmd');
+    if (notice) notice.style.display = 'none';
+    if (cmd) cmd.style.display = 'none';
+}
+
+// Keep ROI player in sync with the active preview/source.
+// Ensures ROI uses server-transcoded files (or the blob preview) whenever available.
+function syncROIVideoWithPreview() {
+    try {
+        const roiVideo = document.getElementById('roiVideo');
+        if (!roiVideo) return;
+
+        // Prefer the preview's current source (blob or server URL) first — it's the authoritative playable source.
+        // Fallbacks: construct a web-accessible URL from `currentVideoPath` filename, then the local File blob.
+        let src = null;
+        if (previewVideo && previewVideo.currentSrc) {
+            src = previewVideo.currentSrc;
+        } else if (currentVideoPath) {
+            // If currentVideoPath is a filesystem path (Windows or POSIX), extract filename and use /uploads/<filename>
+            try {
+                const normalized = String(currentVideoPath).replace(/\\\\/g, '/').split('/').pop();
+                if (normalized) src = `/uploads/${normalized}`;
+                else src = currentVideoPath;
+            } catch (e) {
+                src = currentVideoPath;
+            }
+        } else if (currentVideoFile) {
+            src = URL.createObjectURL(currentVideoFile);
+        }
+        if (!src) return;
+
+        // Only change the src if it differs (avoid unnecessary reloads)
+        if (roiVideo.src !== src) {
+            roiVideo.src = src;
+            try { roiVideo.load(); } catch (e) { /* ignore */ }
+        }
+
+        // If ROI area is visible or enabled, ensure the canvas is initialized after the new source settles
+        const roiContainer = document.getElementById('roiCanvasContainer');
+        if ((roiContainer && roiContainer.style.display !== 'none') || roiEnabled) {
+            setTimeout(initROICanvas, 300);
+        }
+    } catch (e) {
+        console.warn('syncROIVideoWithPreview failed:', e);
+    }
+}
+
+// dismiss button for preview notice (defensive attach)
+document.addEventListener('click', (e) => {
+    if (e.target && e.target.id === 'previewNoticeDismiss') hidePreviewNotice();
+});
+
+// Trigger server-side transcode for the uploaded file
+async function transcodeUploadedFile() {
+    const filename = window.currentUploadedFilename;
+    const transBtn = document.getElementById('previewTranscodeBtn');
+    const noticeText = document.getElementById('previewNoticeText');
+    if (!filename) {
+        if (noticeText) noticeText.textContent = 'Filename not available for server transcode.';
+        return;
+    }
+
+    if (transBtn) { transBtn.disabled = true; transBtn.textContent = 'Transcoding...'; }
+    if (noticeText) noticeText.textContent = 'Server transcode started — please wait...';
+
+    try {
+        const resp = await fetch('/api/transcode_upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+            if (noticeText) noticeText.textContent = 'Transcode failed: ' + (data.error || data.stderr || 'Unknown error');
+            if (transBtn) { transBtn.disabled = false; transBtn.textContent = 'Transcode on server'; }
+        }
+
+        // Update preview to use server-transcoded file
+        if (data && data.url) {
+            previewVideo.src = data.url;
+            previewVideo.load();
+            previewVideo.style.display = 'block';
+            if (noticeText) noticeText.textContent = 'Transcode successful — preview updated.';
+            // Sync ROI player to the transcoded preview so drawing works immediately
+            try {
+                syncROIVideoWithPreview();
+                document.getElementById('roiSection').style.display = 'block';
+            } catch (e) { console.warn('Failed to sync roiVideo after transcode:', e); }
+
+            // hide notice after short delay
+            setTimeout(hidePreviewNotice, 1500);
+        } else {
+            if (noticeText) noticeText.textContent = 'Transcode completed but no preview URL was returned.';
+        }
+    } catch (e) {
+        if (noticeText) noticeText.textContent = 'Error requesting transcode: ' + e.message;
+        if (transBtn) { transBtn.disabled = false; transBtn.textContent = 'Transcode on server'; }
+    }
 }
 
 
@@ -1717,8 +1887,9 @@ function setupROIHandlers() {
     enableROI.addEventListener('change', (e) => {
         roiEnabled = e.target.checked;
         roiCanvasContainer.style.display = roiEnabled ? 'block' : 'none';
-        if (roiEnabled && currentVideoPath) {
-            roiVideo.src = URL.createObjectURL(currentVideoFile);
+        if (roiEnabled) {
+            // Ensure ROI player matches the active preview/source (server or blob)
+            syncROIVideoWithPreview();
             setTimeout(initROICanvas, 500);
         }
     });
@@ -1768,6 +1939,12 @@ function startNewROI() {
 function initROICanvas() {
     const roiCanvas = document.getElementById('roiCanvas');
     const roiVideo = document.getElementById('roiVideo');
+
+    // If the video element hasn't rendered size/frames yet, retry shortly.
+    if (!roiVideo || !roiVideo.offsetWidth || !roiVideo.offsetHeight) {
+        setTimeout(initROICanvas, 200);
+        return;
+    }
 
     roiCanvas.width = roiVideo.offsetWidth;
     roiCanvas.height = roiVideo.offsetHeight;

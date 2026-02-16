@@ -1749,7 +1749,13 @@ def _async_persist_video_metadata(filepath):
 
 @app.route('/api/upload', methods=['POST'])
 def upload_video():
-    """Upload video file (returns filepath plus best-effort recording metadata)."""
+    """Upload video file (returns filepath plus best-effort recording metadata).
+
+    If the form includes `process_now` (truthy) and the user is logged in, start
+    background processing immediately and return the created `job_id`.
+    The uploaded file will be deleted by the processing task after completion
+    (same behaviour as `POST /api/process`).
+    """
     if 'video' not in request.files:
         return jsonify({'error': 'No video file provided'}), 400
 
@@ -1758,33 +1764,173 @@ def upload_video():
     if file.filename == '':
         return jsonify({'error': 'No selected file'}), 400
 
-    if file and allowed_file(file.filename):
-        filename = secure_filename(file.filename)
-        # Add timestamp to avoid conflicts
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{timestamp}_{filename}"
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+    if not (file and allowed_file(file.filename)):
+        return jsonify({'error': 'Invalid file type'}), 400
 
-        # Schedule async metadata extraction so upload response is not delayed
+    # Save upload (timestamped to avoid collisions)
+    filename = secure_filename(file.filename)
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"{timestamp}_{filename}"
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(filepath)
+
+    # Schedule async metadata extraction (unchanged)
+    try:
+        threading.Thread(target=_async_persist_video_metadata, args=(filepath,), daemon=True).start()
+        print(f"[INFO] Uploaded {filename} — scheduled metadata extraction")
+    except Exception as e:
+        print(f"[WARN] Failed to start async metadata thread: {e}")
+
+    # Basic response payload
+    resp = {
+        'success': True,
+        'filename': filename,
+        'filepath': filepath,
+        'recording_start': None,
+        'recording_end': None,
+        'recording_duration': None,
+        'recording_source': None
+    }
+
+    # Helper to interpret truthy form values
+    def _is_truthy(v):
+        if v is None:
+            return False
+        if isinstance(v, bool):
+            return v
+        s = str(v).strip().lower()
+        return s in ('1', 'true', 'yes', 'on')
+
+    # Check whether client asked to start processing immediately
+    process_now = request.form.get('process_now') or request.form.get('process') or request.args.get('process_now')
+    if _is_truthy(process_now):
+        # Must be an authenticated user to start a processing job
+        if 'user_id' not in session:
+            resp['warning'] = 'process_now requested but user is not authenticated; upload saved only.'
+            return jsonify(resp)
+
+        # Read optional processing parameters from the form (fall back to same defaults as /api/process)
+        model_name = request.form.get('model', 'best.pt')
         try:
-            threading.Thread(target=_async_persist_video_metadata, args=(filepath,), daemon=True).start()
-            print(f"[INFO] Uploaded {filename} — scheduled metadata extraction")
-        except Exception as e:
-            print(f"[WARN] Failed to start async metadata thread: {e}")
+            confidence = float(request.form.get('confidence', 0.25))
+        except Exception:
+            confidence = 0.25
+        try:
+            iou_threshold = float(request.form.get('iou_threshold', 0.5))
+        except Exception:
+            iou_threshold = 0.5
+        try:
+            max_age = int(request.form.get('max_age', 45))
+        except Exception:
+            max_age = 45
+        try:
+            min_hits = int(request.form.get('min_hits', 3))
+        except Exception:
+            min_hits = 3
 
-        # Return immediately; metadata sidecar will be written asynchronously
-        return jsonify({
-            'success': True,
-            'filename': filename,
-            'filepath': filepath,
-            'recording_start': None,
-            'recording_end': None,
-            'recording_duration': None,
-            'recording_source': None
+        model_path = os.path.join('modal', model_name)
+        if not os.path.exists(model_path):
+            return jsonify({'error': 'Model file not found', 'model': model_name}), 400
+
+        # Create job entry (mirror behaviour of /api/process)
+        job_id = str(uuid.uuid4())
+        out_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_dir = os.path.join(app.config['OUTPUT_FOLDER'], f'tracking_{out_ts}')
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(os.path.join(output_dir, 'frames'), exist_ok=True)
+
+        processing_jobs[job_id] = {
+            'status': 'initializing',
+            'progress': 0,
+            'total_frames': 0,
+            'processed_frames': 0,
+            'output_dir': output_dir,
+            'start_time': datetime.now().isoformat(),
+            'roi_enabled': False,
+            'user_id': session.get('user_id')
+        }
+
+        print(f"\n{'='*60}")
+        print(f"[NEW JOB CREATED - upload/process_now]")
+        print(f"Job ID: {job_id}")
+        print(f"Video: {filepath}")
+        print(f"Model: {model_path}")
+        print(f"Total jobs in memory: {len(processing_jobs)}")
+        print(f"{'='*60}\n")
+
+        # Start background processing thread (process_video_task will delete the uploaded file after processing)
+        thread = threading.Thread(
+            target=process_video_task,
+            args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
+        )
+        thread.daemon = True
+        thread.start()
+
+        resp.update({
+            'job_id': job_id,
+            'analysis_id': job_id,
+            'output_dir': output_dir,
+            'processing_started': True
         })
 
-    return jsonify({'error': 'Invalid file type'}), 400
+    # Return upload response (possibly with processing info)
+    return jsonify(resp)
+
+
+# Serve uploaded files (used for server-side converted files / thumbnails)
+@app.route('/uploads/<path:filename>')
+def uploaded_file(filename):
+    try:
+        return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    except Exception as e:
+        print(f"Error serving upload {filename}: {e}")
+        return jsonify({'error': 'File not found'}), 404
+
+
+@app.route('/api/transcode_upload', methods=['POST'])
+def api_transcode_upload():
+    """Server-side transcode of an uploaded file to H.264/AAC MP4.
+    Expects JSON: { "filename": "20260215_...mp4" }
+    Returns: { success: True, transcoded_filename, filepath, url }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    filename = data.get('filename')
+    if not filename:
+        return jsonify({'error': 'filename missing'}), 400
+
+    safe_name = secure_filename(filename)
+    in_path = os.path.join(app.config['UPLOAD_FOLDER'], safe_name)
+    if not os.path.exists(in_path):
+        return jsonify({'error': 'uploaded file not found', 'filename': safe_name}), 404
+
+    # ensure ffmpeg exists
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        return jsonify({'error': 'ffmpeg not installed on server'}), 500
+
+    base, _ext = os.path.splitext(safe_name)
+    out_name = f"{base}_h264.mp4"
+    out_path = os.path.join(app.config['UPLOAD_FOLDER'], out_name)
+    # avoid overwrite
+    if os.path.exists(out_path):
+        out_name = f"{base}_h264_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        out_path = os.path.join(app.config['UPLOAD_FOLDER'], out_name)
+
+    cmd = [ffmpeg_path, '-y', '-i', in_path, '-c:v', 'libx264', '-preset', 'fast', '-crf', '23', '-c:a', 'aac', '-b:a', '128k', out_path]
+    try:
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
+        if proc.returncode != 0:
+            stderr = proc.stderr.decode('utf-8', errors='ignore')
+            print(f"[ERROR] ffmpeg failed: {stderr[:400]}")
+            return jsonify({'error': 'transcode_failed', 'stderr': stderr}), 500
+    except subprocess.TimeoutExpired:
+        return jsonify({'error': 'transcode_timeout'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    url = url_for('uploaded_file', filename=out_name)
+    return jsonify({'success': True, 'transcoded_filename': out_name, 'filepath': out_path, 'url': url})
+
 
 @app.route('/api/process', methods=['POST'])
 @login_required

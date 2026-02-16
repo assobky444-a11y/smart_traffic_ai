@@ -25,7 +25,7 @@ wheels/
 
 # Flask
 instance/
-.webassets-cache
+.webassets-cache0
 
 # Uploads and Outputs
 uploads/*
@@ -57,3 +57,4 @@ logs/
 
 # User configuration
 user_config.json
+vehicle_tracking.db
