@@ -41,7 +41,7 @@ from testApp1 import VideoProcessorV1, ConfigV1, classify_tracks_from_df, logger
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "77f493eed3adcbf6ea6e4fd1747083ca29970bbe161f10fe6c2cf43762dd1e58")
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
-app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['UPLOAD_FOLDER'] = '/opt/vehicles_tracking/uploads'
 app.config['OUTPUT_FOLDER'] = 'unified_output'
 app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv'}
 app.config['DATABASE'] = 'vehicle_tracking.db'
