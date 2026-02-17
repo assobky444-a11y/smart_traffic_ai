@@ -1858,6 +1858,22 @@ def upload_video():
         print(f"Total jobs in memory: {len(processing_jobs)}")
         print(f"{'='*60}\n")
 
+        # Persist a minimal job-sidecar on disk so other server workers/processes can discover this job_id
+        try:
+            job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+            os.makedirs(job_index_dir, exist_ok=True)
+            meta = {
+                'status': processing_jobs[job_id]['status'],
+                'output_dir': processing_jobs[job_id]['output_dir'],
+                'start_time': processing_jobs[job_id]['start_time'],
+                'video_path': filepath,
+                'user_id': processing_jobs[job_id].get('user_id')
+            }
+            with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
+                json.dump(meta, fh, ensure_ascii=False, indent=2)
+        except Exception as _e:
+            print(f"[WARN] could not write job index for {job_id}: {_e}")
+
         # Start background processing thread (process_video_task will delete the uploaded file after processing)
         thread = threading.Thread(
             target=process_video_task,
@@ -1984,6 +2000,22 @@ def process_video():
     print(f"ROI Enabled: {roi_points is not None}")
     print(f"Total jobs in memory: {len(processing_jobs)}")
     print(f"{'='*60}\n")
+
+    # Persist a minimal job-sidecar on disk so other server workers/processes can discover this job_id
+    try:
+        job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+        os.makedirs(job_index_dir, exist_ok=True)
+        meta = {
+            'status': processing_jobs[job_id]['status'],
+            'output_dir': processing_jobs[job_id]['output_dir'],
+            'start_time': processing_jobs[job_id]['start_time'],
+            'video_path': video_path,
+            'user_id': processing_jobs[job_id].get('user_id')
+        }
+        with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
+            json.dump(meta, fh, ensure_ascii=False, indent=2)
+    except Exception as _e:
+        print(f"[WARN] could not write job index for {job_id}: {_e}")
     
     # Start processing in background thread
     # package roi metadata and processing params to pass to background task
