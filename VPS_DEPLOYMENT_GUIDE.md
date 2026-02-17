@@ -395,6 +395,51 @@ sudo ufw status
 
 ---
 
+## Step: Task queue (recommended) — Celery + Redis (move heavy work off web workers)
+
+This project can push CPU‑bound video processing to a dedicated worker using Celery + Redis. Follow these quick steps on the VPS:
+
+1) Install Redis
+
+```bash
+sudo apt update
+sudo apt install -y redis-server
+sudo systemctl enable --now redis-server
+redis-cli ping   # should reply: PONG
+```
+
+2) Install Celery and Redis client in the virtualenv
+
+```bash
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+3) Start a Celery worker (development/test)
+
+```bash
+# run from project root
+# use -A celery_worker.celery to point to the Celery app we added
+venv/bin/celery -A celery_worker.celery worker --loglevel=info --concurrency=2
+```
+
+4) (Optional) create a systemd unit for the Celery worker — example available at `deploy/vehicletracking-celery.service` in the repo. Copy it to `/etc/systemd/system/` and start it:
+
+```bash
+sudo cp deploy/vehicletracking-celery.service /etc/systemd/system/vehicletracking-celery.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now vehicletracking-celery
+sudo journalctl -u vehicletracking-celery -f
+```
+
+5) Verify end‑to‑end
+
+- Start web app (Gunicorn with multiple workers) and Celery worker
+- Upload a video and start processing — the web UI will enqueue a Celery task and poll for status
+- Celery worker will perform the heavy processing; results appear under `unified_output/`
+
+---
+
 ## الخطوة 1️⃣4️⃣: (اختياري) إعداد HTTPS مع Let's Encrypt
 
 ```bash

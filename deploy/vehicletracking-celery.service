@@ -1,0 +1,18 @@
+[Unit]
+Description=Celery Worker for Vehicle Tracking
+After=network.target
+
+[Service]
+Type=simple
+User=vehicletracking
+Group=www-data
+WorkingDirectory=/root/vehicles_tracking
+EnvironmentFile=/etc/vehicletracking/vehicletracking.env
+Environment="PATH=/root/vehicles_tracking/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/root/vehicles_tracking/venv/bin/celery -A celery_worker.celery worker --loglevel=info --concurrency=2 -Q default
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

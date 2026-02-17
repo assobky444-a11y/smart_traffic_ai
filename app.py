@@ -1874,13 +1874,21 @@ def upload_video():
         except Exception as _e:
             print(f"[WARN] could not write job index for {job_id}: {_e}")
 
-        # Start background processing thread (process_video_task will delete the uploaded file after processing)
-        thread = threading.Thread(
-            target=process_video_task,
-            args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
-        )
-        thread.daemon = True
-        thread.start()
+        # Enqueue background processing via Celery (fallback to local thread if Celery unavailable)
+        try:
+            from celery_worker import run_process_video
+            processing_jobs[job_id]['status'] = 'queued'
+            run_process_video.delay(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
+            print(f"[OK] Enqueued Celery task for job {job_id}")
+        except Exception as _e:
+            # fallback: start background thread
+            thread = threading.Thread(
+                target=process_video_task,
+                args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
+            )
+            thread.daemon = True
+            thread.start()
+            print(f"[WARN] Celery unavailable, started background thread for job {job_id}: {_e}")
 
         resp.update({
             'job_id': job_id,
@@ -2050,16 +2058,21 @@ def process_video():
         processing_jobs[job_id]['confidence_threshold'] = confidence_threshold
         print(f"[CONFIG] confidence_threshold set by user: {confidence_threshold}")
 
-    thread = threading.Thread(
-        target=process_video_task,
-        args=(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
-    )
-    thread.daemon = True
-    thread.start()
-    
-    print(f"[OK] Background thread started for job {job_id}")
-    print(f"Thread alive: {thread.is_alive()}\n")
-    
+    # Enqueue background processing via Celery (fallback to local thread if Celery unavailable)
+    try:
+        from celery_worker import run_process_video
+        processing_jobs[job_id]['status'] = 'queued'
+        run_process_video.delay(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
+        print(f"[OK] Enqueued Celery task for job {job_id}")
+    except Exception as _e:
+        thread = threading.Thread(
+            target=process_video_task,
+            args=(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
+        )
+        thread.daemon = True
+        thread.start()
+        print(f"[WARN] Celery unavailable, started background thread for job {job_id}: {_e}")
+
     return jsonify({
         'success': True,
         'job_id': job_id,
