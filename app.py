@@ -39,25 +39,9 @@ sys.path.insert(0, os.path.dirname(__file__))
 from testApp1 import VideoProcessorV1, ConfigV1, classify_tracks_from_df, logger as testapp_logger
 
 app = Flask(__name__)
-
-# Load SECRET_KEY from environment. In production we require a real SECRET_KEY;
-# in development an ephemeral key is generated but a warning is printed.
-_INSECURE_DEFAULT_KEY = "77f493eed3adcbf6ea6e4fd1747083ca29970bbe161f10fe6c2cf43762dd1e58"
-_env_secret = os.environ.get("SECRET_KEY")
-if not _env_secret or _env_secret == _INSECURE_DEFAULT_KEY:
-    # If running in production (systemd/Gunicorn), fail fast to avoid insecure secret
-    if os.environ.get("FLASK_ENV") == "production" or os.environ.get("VEHICLETRACKING_ENV") == "production" or not app.debug:
-        raise RuntimeError(
-            "SECRET_KEY is not set or is using the insecure default.\n"
-            "Set SECRET_KEY in /etc/vehicletracking/vehicletracking.env and restart the service."
-        )
-    # Development fallback: ephemeral key (not persisted)
-    _env_secret = os.urandom(32).hex()
-    print("Warning: SECRET_KEY not set — using ephemeral key for development. Set SECRET_KEY in environment for persistence.")
-
-app.secret_key = _env_secret
+app.secret_key = os.environ.get("SECRET_KEY", "77f493eed3adcbf6ea6e4fd1747083ca29970bbe161f10fe6c2cf43762dd1e58")
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
-app.config['UPLOAD_FOLDER'] = '/opt/vehicles_tracking/uploads'
+app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'unified_output'
 app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv'}
 app.config['DATABASE'] = 'vehicle_tracking.db'
@@ -1890,21 +1874,13 @@ def upload_video():
         except Exception as _e:
             print(f"[WARN] could not write job index for {job_id}: {_e}")
 
-        # Enqueue background processing via Celery (fallback to local thread if Celery unavailable)
-        try:
-            from celery_worker import run_process_video
-            processing_jobs[job_id]['status'] = 'queued'
-            run_process_video.delay(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
-            print(f"[OK] Enqueued Celery task for job {job_id}")
-        except Exception as _e:
-            # fallback: start background thread
-            thread = threading.Thread(
-                target=process_video_task,
-                args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
-            )
-            thread.daemon = True
-            thread.start()
-            print(f"[WARN] Celery unavailable, started background thread for job {job_id}: {_e}")
+        # Start background processing thread (process_video_task will delete the uploaded file after processing)
+        thread = threading.Thread(
+            target=process_video_task,
+            args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
+        )
+        thread.daemon = True
+        thread.start()
 
         resp.update({
             'job_id': job_id,
@@ -2074,21 +2050,16 @@ def process_video():
         processing_jobs[job_id]['confidence_threshold'] = confidence_threshold
         print(f"[CONFIG] confidence_threshold set by user: {confidence_threshold}")
 
-    # Enqueue background processing via Celery (fallback to local thread if Celery unavailable)
-    try:
-        from celery_worker import run_process_video
-        processing_jobs[job_id]['status'] = 'queued'
-        run_process_video.delay(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
-        print(f"[OK] Enqueued Celery task for job {job_id}")
-    except Exception as _e:
-        thread = threading.Thread(
-            target=process_video_task,
-            args=(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
-        )
-        thread.daemon = True
-        thread.start()
-        print(f"[WARN] Celery unavailable, started background thread for job {job_id}: {_e}")
-
+    thread = threading.Thread(
+        target=process_video_task,
+        args=(job_id, video_path, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, roi_meta)
+    )
+    thread.daemon = True
+    thread.start()
+    
+    print(f"[OK] Background thread started for job {job_id}")
+    print(f"Thread alive: {thread.is_alive()}\n")
+    
     return jsonify({
         'success': True,
         'job_id': job_id,
@@ -2388,28 +2359,8 @@ def process_video_task(job_id, video_path, model_path, output_dir, confidence, i
 def get_job_status(job_id):
     """Get job status"""
     if job_id in processing_jobs:
-        # Prefer an authoritative sidecar when in-memory state is stale (e.g. 'queued')
         job_data = processing_jobs[job_id].copy()
         job_data['analysis_id'] = job_id
-        try:
-            if job_data.get('status') == 'queued':
-                job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-                meta_path = os.path.join(job_index_dir, 'meta.json')
-                if os.path.exists(meta_path):
-                    meta = json.load(open(meta_path, 'r', encoding='utf-8')) or {}
-                    # update job_data from sidecar when present
-                    if meta.get('status'):
-                        job_data['status'] = meta.get('status')
-                        job_data['progress'] = meta.get('progress', job_data.get('progress', 0))
-                        job_data['output_dir'] = meta.get('output_dir', job_data.get('output_dir'))
-                        # keep in-memory map reasonably in sync so subsequent calls are consistent
-                        processing_jobs[job_id].update({
-                            'status': job_data['status'],
-                            'progress': job_data.get('progress', processing_jobs[job_id].get('progress', 0)),
-                            'output_dir': job_data.get('output_dir', processing_jobs[job_id].get('output_dir'))
-                        })
-        except Exception:
-            pass
         return jsonify(job_data)
 
     # Fallback: look for a completed result folder under OUTPUT_FOLDER (direct job-index folder)
