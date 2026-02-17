@@ -2306,6 +2306,39 @@ def process_video_task(job_id, video_path, model_path, output_dir, confidence, i
             processing_jobs[job_id]['output_dir'] = str(processor.root_out_dir)
             processing_jobs[job_id]['analysis_id'] = job_id
             print(f"Job {job_id} completed successfully")
+
+            # Persist job reference into the job's output meta.json so other processes can find it by job_id
+            try:
+                out_meta_path = os.path.join(str(processor.root_out_dir), 'meta.json')
+                if os.path.exists(out_meta_path):
+                    try:
+                        m = json.load(open(out_meta_path, 'r', encoding='utf-8'))
+                    except Exception:
+                        m = {}
+                    m['analysis_id'] = job_id
+                    with open(out_meta_path, 'w', encoding='utf-8') as fh:
+                        json.dump(m, fh, ensure_ascii=False, indent=2)
+                    print(f"Updated output meta.json with analysis_id for job {job_id}")
+            except Exception as _e:
+                print(f"[WARN] Failed to update output meta.json for job {job_id}: {_e}")
+
+            # Also write a small job-sidecar under OUTPUT_FOLDER/<job_id> pointing to the output_dir
+            try:
+                job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
+                os.makedirs(job_index_dir, exist_ok=True)
+                index_meta = {
+                    'status': 'completed',
+                    'output_dir': str(processor.root_out_dir),
+                    'start_time': processing_jobs[job_id].get('start_time'),
+                    'end_time': processing_jobs[job_id].get('end_time'),
+                    'video_path': video_path,
+                    'analysis_id': job_id
+                }
+                with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
+                    json.dump(index_meta, fh, ensure_ascii=False, indent=2)
+                print(f"Wrote job-sidecar for {job_id} -> {job_index_dir}")
+            except Exception as _e:
+                print(f"[WARN] could not write job index for {job_id} at completion: {_e}")
         
     except Exception as e:
         print(f"\n{'='*60}")
@@ -2330,7 +2363,7 @@ def get_job_status(job_id):
         job_data['analysis_id'] = job_id
         return jsonify(job_data)
 
-    # Fallback: look for a completed result folder under OUTPUT_FOLDER
+    # Fallback: look for a completed result folder under OUTPUT_FOLDER (direct job-index folder)
     folder = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
     if os.path.exists(folder):
         meta_path = os.path.join(folder, 'meta.json')
@@ -2342,6 +2375,26 @@ def get_job_status(job_id):
             meta = {}
         # return a minimal job-like structure so UI can refresh based on archive
         return jsonify({'status': 'completed', 'progress': 100, 'result': {'meta': meta, 'csv_path': os.path.join(folder, 'tracks.csv')}, 'analysis_id': job_id})
+
+    # Second-level fallback: scan all output folders' meta.json for an analysis_id matching job_id
+    try:
+        for candidate in os.listdir(app.config['OUTPUT_FOLDER']):
+            candidate_dir = os.path.join(app.config['OUTPUT_FOLDER'], candidate)
+            if not os.path.isdir(candidate_dir):
+                continue
+            candidate_meta = os.path.join(candidate_dir, 'meta.json')
+            if not os.path.exists(candidate_meta):
+                continue
+            try:
+                cm = json.load(open(candidate_meta, 'r', encoding='utf-8'))
+            except Exception:
+                cm = {}
+            if cm.get('analysis_id') == job_id or cm.get('analysis_id') == str(job_id):
+                # found matching output folder
+                csv_path = os.path.join(candidate_dir, 'tracks.csv')
+                return jsonify({'status': 'completed', 'progress': 100, 'result': {'meta': cm, 'csv_path': csv_path}, 'analysis_id': job_id})
+    except Exception as _e:
+        print(f"[WARN] error while scanning OUTPUT_FOLDER for job_id {job_id}: {_e}")
 
     # Not found anywhere
     available_jobs = list(processing_jobs.keys())
