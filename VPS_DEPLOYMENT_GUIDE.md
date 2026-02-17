@@ -113,7 +113,7 @@ sudo apt upgrade -y
 # تثبيت الأدوات الأساسية
 sudo apt install -y build-essential curl wget git vim nano software-properties-common
 ```
-
+ 
 ---
 
 ## الخطوة 3️⃣: تثبيت Python 3.10+

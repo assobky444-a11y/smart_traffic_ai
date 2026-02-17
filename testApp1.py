@@ -998,7 +998,7 @@ class MOTV1:
             yield tr
         for tr in self.tracks.values():
             yield tr
-
+ 
     def compute_quality_metrics(self) -> Dict[str, Any]:
         """Compute robust quality metrics per track using multi-criteria confidence rules.
 

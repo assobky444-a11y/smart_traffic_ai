@@ -37,7 +37,7 @@ except ImportError:
 # Import testApp1 components
 sys.path.insert(0, os.path.dirname(__file__))
 from testApp1 import VideoProcessorV1, ConfigV1, classify_tracks_from_df, logger as testapp_logger
-
+ 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "77f493eed3adcbf6ea6e4fd1747083ca29970bbe161f10fe6c2cf43762dd1e58")
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
@@ -53,8 +53,8 @@ LINE_HIT_TOLERANCE = 60  # pixels — fixed from backend
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-# Store processing jobs
-processing_jobs = {}
+# Store processing jobs 
+processing_jobs = {} 
 
 # ===================== DATABASE SETUP =====================
 
