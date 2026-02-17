@@ -1,4 +1,7 @@
 import os
+import sys
+# Ensure project root is on PYTHONPATH so `import app` works in forked worker processes
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from celery import Celery
 
 # Broker/back-end can be overridden via env vars (recommended in production)
