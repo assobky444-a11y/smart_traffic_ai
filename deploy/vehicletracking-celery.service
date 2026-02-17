@@ -5,11 +5,11 @@ After=network.target
 [Service]
 Type=simple
 User=vehicletracking
-Group=www-data
-WorkingDirectory=/root/vehicles_tracking
+Group=vehicletracking
+WorkingDirectory=/opt/vehicles_tracking
 EnvironmentFile=/etc/vehicletracking/vehicletracking.env
-Environment="PATH=/root/vehicles_tracking/venv/bin:/usr/local/bin:/usr/bin"
-ExecStart=/root/vehicles_tracking/venv/bin/celery -A celery_worker.celery worker --loglevel=info --concurrency=2 -Q default
+Environment="PATH=/opt/vehicles_tracking/venv/bin:/usr/local/bin:/usr/bin"
+ExecStart=/opt/vehicles_tracking/venv/bin/celery -A celery_worker.celery worker --loglevel=info --concurrency=2
 Restart=on-failure
 RestartSec=5
 LimitNOFILE=65536
