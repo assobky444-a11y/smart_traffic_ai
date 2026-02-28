@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Vehicle Tracking System</title>
+    <title>TraffiCount Pro</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -40,7 +40,7 @@
             <div class="header-content">
                 <div class="logo">
                     <i class="fas fa-car"></i>
-                    <h1>Vehicle Tracking System</h1>
+                    <h1>TraffiCount Pro</h1>
                 </div>
                 <nav style="display: flex; gap: 15px;">
                     {% if session.role == 'admin' %}
@@ -89,7 +89,7 @@
                         <i class="fas fa-folder-open"></i> Choose Video File
                     </label>
                     <input type="file" id="videoInput" accept="video/*" hidden>
-                    <p class="file-info">Supported formats: MP4, AVI, MOV, MKV (Max size: 500MB)</p>
+                    <p class="file-info">Supported formats: MP4, AVI, MOV, MKV (Max size: 5GB)</p>
                 </div>
 
                 <div class="upload-progress" id="uploadProgress" style="display: none;">
@@ -406,7 +406,7 @@
 
                 <!-- Results Cards -->
                 <div class="results-grid" style="margin-bottom: 40px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; align-items: stretch;">
-                    <div class="result-card">
+                    <div class="result-card" style="display: none;">
                         <div class="result-icon"><i class="fas fa-eye"></i></div>
                         <h3 id="totalDetections">0</h3>
                         <p>Total Detections</p>
@@ -415,20 +415,24 @@
                     <div class="result-card">
                         <div class="result-icon"><i class="fas fa-car"></i></div>
                         <h3 id="totalTracks">0</h3>
-                        <p>Total Vehicles <span id="totalVehiclesSource" style="display:block; font-size:0.85rem; color:#ddd; margin-top:6px;">(source: tracks)</span></p>
+                        <p>Total Vehicles <span id="totalVehiclesSource" style="display:none; font-size:0.85rem; color:#ddd; margin-top:6px;">(source: tracks)</span></p>
                         <p style="margin-top:6px;"><span id="unclassifiedBadge" style="font-size:0.85rem; color:#f1c40f; display:none;">Unclassified: <span id="unclassifiedCount">0</span></span></p>
                     </div>
-
+                    <div class="result-card">
+                        <div class="result-icon"><i class="fas fa-eye"></i></div>
+                        <h3 id="vehicleClassCount">0</h3>
+                        <p>Total Classes</p>
+                    </div>
                     <div class="result-card">
                         <div class="result-icon"><i class="fas fa-shield-alt"></i></div>
                         <h3 id="confidentTracks">0</h3>
-                        <p>Confident Tracks <span id="confidentThresholdLabel" style="font-size:0.8rem; color:#ddd; display:block;">(≥ 45%)</span><span id="confidentPct" style="font-size:0.9rem; color:#fff; display:block; font-weight:600; margin-top:6px;">0%</span></p>
+                        <p>Verified Vehicles <span id="confidentThresholdLabel" style="font-size:0.8rem; color:#ddd; display:none;">(≥ 45%)</span><span id="confidentPct" style="font-size:0.9rem; color:#fff; display:block; font-weight:600; margin-top:6px;">0%</span></p>
                     </div>
 
                     <div class="result-card">
                         <div class="result-icon"><i class="fas fa-exclamation-triangle"></i></div>
                         <h3 id="lowConfidenceTracks">0</h3>
-                        <p>Low-confidence Tracks <span id="lowThresholdLabel" style="font-size:0.8rem; color:#ddd; display:block;">(&lt; 45%)</span><span id="lowConfidencePct" style="font-size:0.9rem; color:#fff; display:block; font-weight:600; margin-top:6px;">0%</span></p>
+                        <p>Vehicles Needing Review <span id="lowThresholdLabel" style="font-size:0.8rem; color:#ddd; display:none;">(&lt; 45%)</span><span id="lowConfidencePct" style="font-size:0.9rem; color:#fff; display:block; font-weight:600; margin-top:6px;">0%</span></p>
                     </div>
                 </div> 
 
@@ -442,7 +446,7 @@
                 <div style="margin-bottom: 40px;">
                     <h3 style="margin-bottom: 20px; color: #eee; display: flex; align-items: center; gap: 10px;">
                         <i class="fas fa-bars-chart"></i> Preliminary Breakdown of Vehicle Classification (Initial Categorization)
-                        <span id="vehicleClassSummary" style="margin-left:auto; font-size:0.9rem; color:#ddd;">Classes: <span id="vehicleClassCount">0</span></span>
+                        <!-- <span id="vehicleClassSummary" style="margin-left:auto; font-size:0.9rem; color:#ddd;">Classes: <span id="vehicleClassCount">0</span></span> -->
                     </h3>
                     <div id="vehicleClassesBreakdown" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
                         <!-- Will be populated dynamically -->
@@ -464,7 +468,7 @@
                     <button class="btn btn-process-user" id="processManuallyBtn"
                         onclick="processManuallyIndex(this)"
                         style="margin-top:15px; background:#28a745; color:white; padding:12px 40px; font-size:15px; font-weight:600; border:none; border-radius:8px; cursor:pointer;">
-                        <i class="fas fa-cogs"></i> Process Manually
+                        <i class="fas fa-cogs"></i> Analyze Now
                     </button>
                 </div>
 
@@ -478,11 +482,11 @@
                     </button>
                     <!-- New: Show Low-Confidence Tracks -->
                     <button class="btn btn-warning" id="showLowConfBtn" style="margin-left:auto; display:none;">
-                        <i class="fas fa-exclamation-circle"></i> Show Low-Confidence Tracks
+                        <i class="fas fa-exclamation-circle"></i> Vehicles Needing Review
                     </button>
-                    <button class="btn btn-info" id="regeneratePreviewsBtn" style="display:none; margin-left:10px;">
+                    <!-- <button class="btn btn-info" id="regeneratePreviewsBtn" style="display:none; margin-left:10px;">
                         <i class="fas fa-sync"></i> Regenerate Previews
-                    </button>
+                    </button> -->
                 </div>
             </section> 
 
@@ -569,7 +573,7 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2026 Advanced Vehicle Tracking System - All Rights Reserved</p>
+            <p>&copy; 2026 TraffiCount Pro - All Rights Reserved</p>
         </div>
     </footer>
 
@@ -645,7 +649,10 @@
             }
         });
 
-        // Process Manually from index: create request if needed then open line drawing as user
+        // store current session role for redirect logic
+        const userRole = "{{ session.role or 'user' }}";
+
+        // Process Manually from index: create request if needed then open line drawing in correct namespace
         async function processManuallyIndex(btn) {
             if (!btn) return;
             const originalHTML = btn.innerHTML;
@@ -666,8 +673,9 @@
                 const checkData = await checkRes.json();
 
                 if (checkData.exists && checkData.request_id) {
-                    // Redirect to existing request's line drawing as user
-                    window.location.href = `/user/line_drawing?request_id=${checkData.request_id}`;
+                    const base = userRole === 'admin' ? '/admin' : '/user';
+                    // Redirect to existing request's line drawing
+                    window.location.href = `${base}/line_drawing?request_id=${checkData.request_id}`;
                     return;
                 }
 
@@ -682,8 +690,9 @@
                 const data = await response.json();
 
                 if (data && data.success && data.request_id) {
-                    // Redirect to user line drawing
-                    window.location.href = `/user/line_drawing?request_id=${data.request_id}`;
+                    const base = userRole === 'admin' ? '/admin' : '/user';
+                    // Redirect to appropriate line drawing
+                    window.location.href = `${base}/line_drawing?request_id=${data.request_id}`;
                     return;
                 } else {
                     alert('Error: ' + (data.error || 'Failed to create request'));

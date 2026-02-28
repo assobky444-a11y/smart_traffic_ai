@@ -18,6 +18,7 @@ class TrackSegment:
     y_coords: List[float] = field(default_factory=list)
     in_leg_numbers: Set[int] = field(default_factory=set)
     out_leg_numbers: Set[int] = field(default_factory=set)
+    vehicle_type: str = None  # keep type for matching
     
     def first_frame(self) -> int:
         return self.frames[0] if self.frames else -1
@@ -45,6 +46,7 @@ class TrackSegment:
             'y': self.y_coords,
             'in_leg': [list(self.in_leg_numbers) if self.in_leg_numbers else [] for _ in self.frames],
             'out_leg': [list(self.out_leg_numbers) if self.out_leg_numbers else [] for _ in self.frames],
+            'vehicle_type': [self.vehicle_type] * len(self.frames) if self.vehicle_type is not None else [None] * len(self.frames),
         }
         return pd.DataFrame(data)
 
@@ -54,19 +56,23 @@ class TrackRelinkSystem:
     
     def __init__(self, trajectories_df: pd.DataFrame, 
                  frame_threshold: int = 10,
-                 distance_threshold: float = 100.0):
+                 distance_threshold: float = 100.0,
+                 angle_threshold: float = 45.0):
         """
         Initialize the relinking system
         
         Args:
-            trajectories_df: DataFrame with columns [track_id, frame, x, y, in_leg, out_leg]
+            trajectories_df: DataFrame with columns [track_id, frame, x, y, in_leg, out_leg, vehicle_type]
             frame_threshold: Maximum frame difference for matching
             distance_threshold: Maximum pixel distance for matching
+            angle_threshold: Maximum allowed angular deviation (degrees) between end/start directions
         """
         self.df = trajectories_df.copy()
-        self.frame_threshold = frame_threshold
-        self.distance_threshold = distance_threshold
+        self.frame_threshold = frame_threshold  # max frame gap allowed
+        self.distance_threshold = distance_threshold  # pixel distance threshold
+        self.angle_threshold = angle_threshold  # degrees between directions
         self.new_tracks: List[pd.DataFrame] = []
+        self.replaced_ids: Set[int] = set()  # original track_ids that have been merged
         self.next_track_id = int(self.df['track_id'].max()) + 1
         
     def _parse_leg_numbers(self, leg_str):
@@ -102,13 +108,16 @@ class TrackRelinkSystem:
                 all_out_legs.update(out_legs)
             
             # Create segment
+            # capture predominant vehicle type if available
+            vtype = track_data['vehicle_type'].iloc[0] if 'vehicle_type' in track_data.columns else None
             segment = TrackSegment(
                 track_id=track_id,
                 frames=track_data['frame'].tolist(),
                 x_coords=track_data['x'].tolist(),
                 y_coords=track_data['y'].tolist(),
                 in_leg_numbers=all_in_legs,
-                out_leg_numbers=all_out_legs
+                out_leg_numbers=all_out_legs,
+                vehicle_type=vtype
             )
             
             # Classification
@@ -126,12 +135,16 @@ class TrackRelinkSystem:
         return out_only, in_only, middle
     
     def _matches(self, seg1_end: Tuple[int, float, float], 
-                 seg2_start: Tuple[int, float, float]) -> bool:
+                 seg2_start: Tuple[int, float, float],
+                 seg1: TrackSegment = None,
+                 seg2: TrackSegment = None) -> bool:
         """
-        Check if two segments match based on spatial-temporal criteria
+        Check if two segments match based on spatial-temporal criteria (and optional
+        vehicle type / direction consistency if segments are provided).
         
         seg1_end: (frame, x, y) - last point of first segment
         seg2_start: (frame, x, y) - first point of second segment
+        seg1, seg2: optional TrackSegment objects (used for additional checks)
         """
         frame1, x1, y1 = seg1_end
         frame2, x2, y2 = seg2_start
@@ -139,10 +152,34 @@ class TrackRelinkSystem:
         frame_diff = abs(frame2 - frame1)
         x_diff = abs(x2 - x1)
         y_diff = abs(y2 - y1)
-        
-        return (frame_diff <= self.frame_threshold and 
+        if not (frame_diff <= self.frame_threshold and 
                 x_diff <= self.distance_threshold and 
-                y_diff <= self.distance_threshold)
+                y_diff <= self.distance_threshold):
+            return False
+
+        # vehicle type must match if available
+        if seg1 and seg2 and seg1.vehicle_type and seg2.vehicle_type:
+            if seg1.vehicle_type != seg2.vehicle_type:
+                return False
+
+        # direction consistency: compare angle of last segment vector vs first segment vector
+        if seg1 and seg2 and len(seg1.frames) >= 2 and len(seg2.frames) >= 2:
+            dx1 = seg1.x_coords[-1] - seg1.x_coords[-2]
+            dy1 = seg1.y_coords[-1] - seg1.y_coords[-2]
+            dx2 = seg2.x_coords[1] - seg2.x_coords[0]
+            dy2 = seg2.y_coords[1] - seg2.y_coords[0]
+            if dx1 == 0 and dy1 == 0 or dx2 == 0 and dy2 == 0:
+                pass
+            else:
+                ang1 = np.arctan2(dy1, dx1)
+                ang2 = np.arctan2(dy2, dx2)
+                diff = abs(ang2 - ang1)
+                diff = min(diff, 2*np.pi - diff)
+                # convert threshold to radians
+                rad_thresh = np.deg2rad(self.angle_threshold)
+                if diff > rad_thresh:
+                    return False
+        return True
     
     def _merge_segments(self, seg1: TrackSegment, seg2: TrackSegment) -> TrackSegment:
         """Merge two segments into one"""
@@ -177,10 +214,13 @@ class TrackRelinkSystem:
                 x_mid, y_mid = mid_track.first_position()
                 
                 if self._matches((last_frame_in, x_in, y_in), 
-                                (first_frame_mid, x_mid, y_mid)):
+                                (first_frame_mid, x_mid, y_mid),
+                                seg1=in_track, seg2=mid_track):
                     # Match found - merge
                     merged = self._merge_segments(in_track, mid_track)
                     linked_tracks.append(merged)
+                    self.replaced_ids.add(in_track.track_id)
+                    self.replaced_ids.add(mid_track.track_id)
                     used_middle_ids.add(mid_idx)
                     break
         
@@ -208,9 +248,12 @@ class TrackRelinkSystem:
                 x_mid, y_mid = mid_track.last_position()
                 
                 if self._matches((last_frame_mid, x_mid, y_mid),
-                                (first_frame_out, x_out, y_out)):
+                                (first_frame_out, x_out, y_out),
+                                seg1=mid_track, seg2=out_track):
                     merged = self._merge_segments(mid_track, out_track)
                     linked_tracks.append(merged)
+                    self.replaced_ids.add(mid_track.track_id)
+                    self.replaced_ids.add(out_track.track_id)
                     used_middle_ids.add(mid_idx)
                     break
             
@@ -220,14 +263,44 @@ class TrackRelinkSystem:
                 x_last, y_last = in_mid_track.last_position()
                 
                 if self._matches((last_frame, x_last, y_last),
-                                (first_frame_out, x_out, y_out)):
+                                (first_frame_out, x_out, y_out),
+                                seg1=in_mid_track, seg2=out_track):
                     merged = self._merge_segments(in_mid_track, out_track)
                     linked_tracks.append(merged)
+                    self.replaced_ids.add(in_mid_track.track_id)
+                    self.replaced_ids.add(out_track.track_id)
                     in_to_mid_tracks.remove(in_mid_track)
                     break
         
         return linked_tracks
     
+    def _phase_middle_to_middle(self, middle: List[TrackSegment]) -> Tuple[List[TrackSegment], List[TrackSegment]]:
+        """Try to merge consecutive middle tracks (no leg crossings) based on matching rules."""
+        merged = []
+        used = set()
+        # sort by start frame
+        indices = sorted(range(len(middle)), key=lambda i: middle[i].first_frame())
+        for idx in indices:
+            if idx in used:
+                continue
+            seg = middle[idx]
+            for jdx in indices:
+                if jdx <= idx or jdx in used:
+                    continue
+                other = middle[jdx]
+                if self._matches((seg.last_frame(), *seg.last_position()),
+                                (other.first_frame(), *other.first_position()),
+                                seg1=seg, seg2=other):
+                    merged_seg = self._merge_segments(seg, other)
+                    merged.append(merged_seg)
+                    # mark originals for removal
+                    self.replaced_ids.add(seg.track_id)
+                    self.replaced_ids.add(other.track_id)
+                    used.add(idx); used.add(jdx)
+                    break
+        remaining = [middle[i] for i in range(len(middle)) if i not in used]
+        return merged, remaining
+
     def relink_tracks(self) -> pd.DataFrame:
         """
         Main method: Execute all 4 phases to relink broken tracks
@@ -245,6 +318,12 @@ class TrackRelinkSystem:
         print(f"  - Middle: {len(middle)} tracks")
         
         # Phase B: Link In → Middle
+        # optional phase: merge middle-to-middle segments (tracks with no leg crossings)
+        print("🔗 Phase M: Linking Middle segments to each other...")
+        mid_mid_tracks, middle = self._phase_middle_to_middle(middle)
+        print(f"  - Merged {len(mid_mid_tracks)} middle track pairs")
+        
+        # Phase B: Link In → Middle
         print("🔗 Phase B: Linking In-only to Middle...")
         in_to_mid_tracks, used_middle = self._phase_b_in_to_middle(in_only, middle)
         print(f"  - Created {len(in_to_mid_tracks)} new links")
@@ -260,13 +339,17 @@ class TrackRelinkSystem:
         
         # Add original complete tracks
         complete_tracks = self.df.copy()
+        # drop any original rows that have been replaced by merged segments
+        if self.replaced_ids:
+            complete_tracks = complete_tracks[~complete_tracks['track_id'].isin(self.replaced_ids)]
         
         # Add newly linked tracks
         new_track_dfs = []
         
+        for track in mid_mid_tracks:
+            new_track_dfs.append(track.to_dataframe())
         for track in in_to_mid_tracks:
             new_track_dfs.append(track.to_dataframe())
-        
         for track in mid_to_out_tracks:
             new_track_dfs.append(track.to_dataframe())
         
@@ -283,7 +366,8 @@ class TrackRelinkSystem:
 
 def relink_trajectories(trajectories_df: pd.DataFrame,
                        frame_threshold: int = 10,
-                       distance_threshold: float = 100.0) -> pd.DataFrame:
+                       distance_threshold: float = 100.0,
+                       angle_threshold: float = 45.0) -> pd.DataFrame:
     """
     Convenience function to relink trajectories
     

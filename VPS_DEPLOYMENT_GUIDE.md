@@ -61,7 +61,7 @@ vehicle_tracking/
 │   └── script.js
 ├── analysis_requests/       # مجلد طلبات التحليل (يدوياً أو من الويب)
 ├── unified_output/          # مخرجات التحليل (tracks.csv, frames/, results/)
-├── uploads/                 # ملفات مرفوعة من المستخدم
+├── uploads/                 # ملفات مرفوعة من المستخدم (مجلد موحد – تتم إزالته تلقائياً بعد المعالجة)
 ├── logs/                    # سجلات التشغيل
 ├── .github/
 ├── .gitignore
@@ -234,7 +234,7 @@ pip list
 
 ```bash
 # التأكد من وجود جميع المجلدات
-mkdir -p uploads unified_output logs
+mkdir -p uploads unified_output logs  # uploads will be emptied by the app after each job
 
 # إعطاء الصلاحيات
 chmod 755 uploads unified_output logs
@@ -252,7 +252,7 @@ python app.py
 **يجب أن ترى:**
 ```
 ============================================================
-Advanced Vehicle Tracking System
+TraffiCount Pro
 ============================================================
  * Serving Flask app 'app'
  * Running on http://0.0.0.0:5000

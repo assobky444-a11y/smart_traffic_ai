@@ -1,4 +1,4 @@
-/* Advanced Vehicle Tracking System - Dark Theme */
+/* TraffiCount Pro - Dark Theme */
 
 :root {
     /* Dark Theme Colors */
@@ -10,6 +10,7 @@
     
     /* Text Colors */
     --text-primary: #f1f5f9;
+    --text-dark: #0f172a;
     --text-secondary: #cbd5e1;
     --text-muted: #94a3b8;
     

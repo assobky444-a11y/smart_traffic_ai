@@ -1,4 +1,4 @@
-// Advanced Vehicle Tracking System - JavaScript
+// TraffiCount Pro - JavaScript
 
 let currentVideoFile = null;
 let currentVideoPath = null;
@@ -222,7 +222,12 @@ function setupEventListeners() {
     uploadArea.addEventListener('dragover', handleDragOver);
     uploadArea.addEventListener('dragleave', handleDragLeave);
     uploadArea.addEventListener('drop', handleDrop);
-    uploadArea.addEventListener('click', () => videoInput.click());
+    // open file picker only when background area clicked (not the label/input itself)
+    uploadArea.addEventListener('click', (e) => {
+        if (e.target === uploadArea) {
+            videoInput.click();
+        }
+    });
     
     // File input
     videoInput.addEventListener('change', handleFileSelect);
@@ -284,7 +289,7 @@ async function handleFile(file) {
         return;
     }
     
-    // Validate file size (500MB max)
+    // Validate file size (5GB max)
     const maxSize = 500 * 1024 * 1024;
     if (file.size > maxSize) {
         alert('File size is too large. Maximum size is 500 MB.');
@@ -392,6 +397,7 @@ function showVideoPreview(file) {
                 <span><strong>Duration:</strong> ${formattedTime}</span>
             </div>
         `;
+        // videoDurationLabel element removed; no update needed
 
         // Keep ROI in sync with the actual playable preview source so drawing works after server transcode
         try {
@@ -1745,6 +1751,7 @@ document.getElementById('expectedConfirmAllBtn')?.addEventListener('click', asyn
 async function renderUnclassifiedGrid() {
     const grid = document.getElementById('unclassifiedGrid');
     const countEl = document.getElementById('unclassifiedCountModal');
+    // always start with an empty container
     grid.innerHTML = '';
 
     // Build class list: combine expected categories, server vehicle_classes, and a sensible default list
@@ -1760,6 +1767,11 @@ async function renderUnclassifiedGrid() {
     } catch (e) {
         console.warn('Could not fetch vehicle classes for unclassified selector', e);
     }
+
+    // re-clear the grid after the asynchronous fetch above in case another
+    // invocation was started concurrently; this prevents previously appended
+    // cards from sticking around and causing duplicates.
+    grid.innerHTML = '';
 
     // Add default common classes to ensure useful options (including requested ones)
     const DEFAULT_CLASSES = ['person','truck','bus','car','van','motorbike','bicycle','tuktuk','microbus','pickup','tricycle','unclassified'];

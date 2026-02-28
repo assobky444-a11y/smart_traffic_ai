@@ -1,9 +1,9 @@
 """
-Flask Application for Advanced Vehicle Tracking
+Flask Application for TraffiCount Pro
 Using testApp1.py backend for superior tracking quality
 """
 
-from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, flash, session, abort
+from flask import Flask, render_template, request, jsonify, send_from_directory, redirect, url_for, flash, session, abort, Response
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
@@ -23,6 +23,39 @@ import zipfile
 import shutil
 import io
 
+# external dependency used for communicating with license server
+import requests
+
+# license manager helper (added for new integration)
+from license_manager import (
+    load_license_key,
+    save_license_key,
+    verify_license,
+    verify_trial,
+    create_trial,
+    check_stored_license,
+    check_trial_eligibility,
+)
+
+# Optional OCR support
+try:
+    import easyocr
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
+import re
+
+# Optional PDF generation (reportlab)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    # ParagraphStyle is needed for custom styles
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
+
 # Matplotlib imports for visualization
 try:
     import matplotlib
@@ -40,7 +73,7 @@ from testApp1 import VideoProcessorV1, ConfigV1, classify_tracks_from_df, logger
  
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "77f493eed3adcbf6ea6e4fd1747083ca29970bbe161f10fe6c2cf43762dd1e58")
-app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024 * 1024  # 5GB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.config['OUTPUT_FOLDER'] = 'unified_output'
 app.config['ALLOWED_EXTENSIONS'] = {'mp4', 'avi', 'mov', 'mkv'}
@@ -52,6 +85,14 @@ LINE_HIT_TOLERANCE = 60  # pixels — fixed from backend
 # Create necessary folders
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+
+# The output folder is the parent for timestamped job subdirectories named
+# tracking_YYYYMMDD_HHMMSS.  We reserve the actual timestamped directory at job
+# creation time but defer physically creating it until the processor exports
+# results.  This avoids race conditions, duplicate folders, and ensures only one
+# folder is ever produced per run.  We no longer create UUID-based sidecar
+# directories here; all job metadata lives in memory or inside the final
+# tracking_* folder's meta.json.
 
 # Store processing jobs 
 processing_jobs = {} 
@@ -113,6 +154,194 @@ def init_db():
 
 # Initialize database on startup
 init_db()
+
+# ensure we have a device identifier as soon as the application starts
+from device_manager import ensure_device_id
+device_id = ensure_device_id()
+print(f'[INFO] Device ID: {device_id}')
+
+# perform an initial license check so there is some feedback in the console
+startup_status, startup_info = check_stored_license()
+if startup_status is True:
+    print('[OK] Stored license validated successfully')
+elif startup_status is False:
+    print('[WARN] Stored license is invalid or expired')
+elif startup_status is None:
+    print('[WARN] Could not reach license server during startup')
+
+# ===================== LICENSE MANAGEMENT =====================
+
+# File used to store the current license/trial key
+LICENSE_FILE = 'license.json'
+
+@app.before_request
+def ensure_license():
+    """Block every page until a valid license or trial key exists and is verified.
+    The license activation endpoints and static assets are exempted so the user can
+    continue to the activation page even when no valid key is present.
+    """
+    # make sure device id exists in case we arrive here before visiting activation
+    from device_manager import ensure_device_id
+    ensure_device_id()
+
+    # allow the license activation routes and static assets
+    allowed_prefixes = ['/license', '/static', '/favicon.ico']
+    for prefix in allowed_prefixes:
+        if request.path.startswith(prefix):
+            return None
+
+    # At this point the user is trying to access the application proper.
+    status, info = check_stored_license()
+    if status is None:
+        # server unreachable
+        flash('Cannot connect to license server.', 'error')
+        return redirect(url_for('license_activation'))
+    if status is False:
+        # invalid or expired – decide whether to keep the saved key;
+        # trial keys must be retained to prevent the user from starting a
+        # second free trial even if the previous one was revoked/expired.
+        if info and isinstance(info, dict):
+            stored = load_license_key()
+        else:
+            stored = load_license_key()
+        if stored and not stored.startswith('TRIAL-'):
+            # non-trial license is invalid; wipe it to allow re-entry
+            try:
+                if os.path.exists(LICENSE_FILE):
+                    os.remove(LICENSE_FILE)
+            except Exception:
+                pass
+        flash('License invalid or expired. Please activate.', 'error')
+        return redirect(url_for('license_activation'))
+    # if status is True, everything is ok and we let the request continue
+
+# routes for the license activation page
+@app.route('/license', methods=['GET'])
+def license_activation():
+    """Render the license activation page and determine whether the free-trial section
+    should be shown. The trial form is only visible when no license.json exists at all
+    (i.e. the user has never obtained a trial or license).
+
+    If a trial key is stored but expired we still hide the trial form and show a
+    "Trial expired" message instead.
+    """
+    # ensure device id exists before performing any actions
+    from device_manager import ensure_device_id
+    ensure_device_id()
+
+    # decide visibility based strictly on file existence
+    file_exists = os.path.exists(LICENSE_FILE)
+    show_trial = not file_exists
+    status_message = None
+
+    if not file_exists:
+        # no local key; ask server if this device is allowed a trial
+        eligibility = check_trial_eligibility()
+        if eligibility is None:
+            # network error: hide trial form and show error
+            show_trial = False
+            status_message = 'Cannot connect to license server.'
+        else:
+            show_trial = eligibility.get('eligible', False)
+            if not show_trial:
+                status_message = eligibility.get('reason')
+    else:
+        # we have a file; try to load key to provide contextual messages
+        stored = load_license_key()
+        if stored and stored.startswith('TRIAL-'):
+            # check validity only to display expiry notice or reason
+            result = verify_trial(stored)
+            if result is None:
+                status_message = 'Cannot connect to license server.'
+            elif not result.get('valid'):
+                status_message = result.get('reason', 'Trial expired')
+        # full licenses don't need any message here
+
+    # retrieve current device id for display
+    device_id = ensure_device_id()
+    return render_template('license_activation.html', show_trial=show_trial, status_message=status_message, device_id=device_id)
+
+
+@app.route('/license/activate', methods=['POST'])
+def activate_license():
+    key = request.form.get('license_key', '').strip()
+    if not key:
+        flash('Please enter a license key', 'error')
+        return redirect(url_for('license_activation'))
+
+    result = verify_license(key)
+    if result is None:
+        flash('Cannot connect to license server.', 'error')
+        return redirect(url_for('license_activation'))
+
+    if result.get('valid'):
+        save_license_key(key)
+        flash('License activated successfully!', 'success')
+        return redirect(url_for('login'))
+    else:
+        reason = result.get('reason') or 'Invalid License Key'
+        flash(reason, 'error')
+        return redirect(url_for('license_activation'))
+
+
+@app.route('/license/start_trial', methods=['POST'])
+def start_trial():
+    email = request.form.get('email', '').strip()
+    if not email:
+        flash('Please provide an email address', 'error')
+        return redirect(url_for('license_activation'))
+
+    creation = create_trial(email)
+    if creation is None:
+        flash('Cannot connect to license server.', 'error')
+        return redirect(url_for('license_activation'))
+
+    if not creation.get('success'):
+        reason = creation.get('reason', 'Failed to create trial. Please try again later.')
+        flash(reason, 'error')
+        return redirect(url_for('license_activation'))
+
+    trial_key = creation.get('trial_key')
+    if not trial_key:
+        flash('Failed to create trial. Please try again later.', 'error')
+        return redirect(url_for('license_activation'))
+
+    verification = verify_trial(trial_key)
+    if verification is None:
+        flash('Cannot connect to license server.', 'error')
+        return redirect(url_for('license_activation'))
+
+    if verification.get('valid'):
+        save_license_key(trial_key)
+        flash('Free trial started! You may now log in.', 'success')
+        return redirect(url_for('login'))
+    else:
+        flash('Trial expired or invalid.', 'error')
+        return redirect(url_for('license_activation'))
+
+
+@app.route('/license/verify_trial', methods=['POST'])
+def verify_existing_trial():
+    key = request.form.get('trial_key', '').strip()
+    if not key:
+        flash('Please enter a trial key', 'error')
+        return redirect(url_for('license_activation'))
+
+    result = verify_trial(key)
+    if result is None:
+        flash('Cannot connect to license server.', 'error')
+        return redirect(url_for('license_activation'))
+
+    if result.get('valid'):
+        expiry = result.get('expiry_date', 'unknown')
+        flash(f'Trial Active. Expiry Date: {expiry}', 'success')
+        # do NOT save key automatically; user can start trial if desire
+    else:
+        reason = result.get('reason') or 'Trial Expired or Invalid'
+        flash(reason, 'error')
+
+    return redirect(url_for('license_activation'))
+
 
 # ===================== AUTHENTICATION =====================
 
@@ -758,6 +987,20 @@ def get_request_status(request_id):
         # Add results if completed
         if request_data['status'] == 'completed' and request_data['results_path']:
             results_folder = request_data['results_path']
+
+            # infer times/duration and include in response
+            try:
+                start_dt, end_dt, duration_txt = infer_timestamps_and_duration(results_folder)
+                if start_dt:
+                    result['start_time'] = start_dt.isoformat()
+                if end_dt:
+                    result['end_time'] = end_dt.isoformat()
+                if duration_txt:
+                    result['duration'] = duration_txt
+            except Exception as _:
+                # ignore failures
+                pass
+
             result['results'] = {}
             print(f"[INFO] Checking for charts in: {results_folder}")
             
@@ -1632,8 +1875,17 @@ def line_drawing_page():
 @app.route('/api/models', methods=['GET'])
 @login_required
 def get_models():
-    """Get available YOLO models"""
-    model_dir = 'modal'
+    """Get available YOLO models
+
+    When running as a onefile executable the Python source is extracted to a
+    temporary folder.  Relying on the current working directory would therefore
+    fail to locate the `modal/` directory.  Instead compute the path relative
+    to this file's location (``__file__``), which points into the temporary
+    extraction location in that scenario.
+    """
+    base = os.path.dirname(os.path.abspath(__file__))
+    model_dir = os.path.join(base, 'modal')
+    print(f"[DEBUG] model lookup base={base}, model_dir={model_dir}")
     models = []
     
     if os.path.exists(model_dir):
@@ -1751,146 +2003,154 @@ def _async_persist_video_metadata(filepath):
 def upload_video():
     """Upload video file (returns filepath plus best-effort recording metadata).
 
+    Videos are initially saved under the root `uploads/` folder (see
+    `app.config['UPLOAD_FOLDER']`).  Previously the processing pipeline would
+    duplicate the file into the job's own `uploads/` subfolder, but uploads are
+    now always referenced in the single central directory.  After a job
+    completes the original file is removed so no uploaded media remain on disk.
+
     If the form includes `process_now` (truthy) and the user is logged in, start
     background processing immediately and return the created `job_id`.
     The uploaded file will be deleted by the processing task after completion
     (same behaviour as `POST /api/process`).
     """
-    if 'video' not in request.files:
-        return jsonify({'error': 'No video file provided'}), 400
-
-    file = request.files['video']
-
-    if file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    if not (file and allowed_file(file.filename)):
-        return jsonify({'error': 'Invalid file type'}), 400
-
-    # Save upload (timestamped to avoid collisions)
-    filename = secure_filename(file.filename)
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    filename = f"{timestamp}_{filename}"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-
-    # Schedule async metadata extraction (unchanged)
     try:
-        threading.Thread(target=_async_persist_video_metadata, args=(filepath,), daemon=True).start()
-        print(f"[INFO] Uploaded {filename} — scheduled metadata extraction")
-    except Exception as e:
-        print(f"[WARN] Failed to start async metadata thread: {e}")
+        if 'video' not in request.files:
+            return jsonify({'error': 'No video file provided'}), 400
 
-    # Basic response payload
-    resp = {
-        'success': True,
-        'filename': filename,
-        'filepath': filepath,
-        'recording_start': None,
-        'recording_end': None,
-        'recording_duration': None,
-        'recording_source': None
-    }
+        file = request.files['video']
 
-    # Helper to interpret truthy form values
-    def _is_truthy(v):
-        if v is None:
-            return False
-        if isinstance(v, bool):
-            return v
-        s = str(v).strip().lower()
-        return s in ('1', 'true', 'yes', 'on')
+        if file.filename == '':
+            return jsonify({'error': 'No selected file'}), 400
 
-    # Check whether client asked to start processing immediately
-    process_now = request.form.get('process_now') or request.form.get('process') or request.args.get('process_now')
-    if _is_truthy(process_now):
-        # Must be an authenticated user to start a processing job
-        if 'user_id' not in session:
-            resp['warning'] = 'process_now requested but user is not authenticated; upload saved only.'
-            return jsonify(resp)
+        if not (file and allowed_file(file.filename)):
+            return jsonify({'error': 'Invalid file type'}), 400
 
-        # Read optional processing parameters from the form (fall back to same defaults as /api/process)
-        model_name = request.form.get('model', 'best.pt')
+        # Save upload (timestamped to avoid collisions)
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"{timestamp}_{filename}"
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+
+        # Schedule async metadata extraction (unchanged)
         try:
-            confidence = float(request.form.get('confidence', 0.25))
-        except Exception:
-            confidence = 0.25
-        try:
-            iou_threshold = float(request.form.get('iou_threshold', 0.5))
-        except Exception:
-            iou_threshold = 0.5
-        try:
-            max_age = int(request.form.get('max_age', 45))
-        except Exception:
-            max_age = 45
-        try:
-            min_hits = int(request.form.get('min_hits', 3))
-        except Exception:
-            min_hits = 3
+            threading.Thread(target=_async_persist_video_metadata, args=(filepath,), daemon=True).start()
+            print(f"[INFO] Uploaded {filename} — scheduled metadata extraction")
+        except Exception as e:
+            print(f"[WARN] Failed to start async metadata thread: {e}")
 
-        model_path = os.path.join('modal', model_name)
-        if not os.path.exists(model_path):
-            return jsonify({'error': 'Model file not found', 'model': model_name}), 400
-
-        # Create job entry (mirror behaviour of /api/process)
-        job_id = str(uuid.uuid4())
-        out_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
-        output_dir = os.path.join(app.config['OUTPUT_FOLDER'], f'tracking_{out_ts}')
-        os.makedirs(output_dir, exist_ok=True)
-        os.makedirs(os.path.join(output_dir, 'frames'), exist_ok=True)
-
-        processing_jobs[job_id] = {
-            'status': 'initializing',
-            'progress': 0,
-            'total_frames': 0,
-            'processed_frames': 0,
-            'output_dir': output_dir,
-            'start_time': datetime.now().isoformat(),
-            'roi_enabled': False,
-            'user_id': session.get('user_id')
+        # Basic response payload
+        resp = {
+            'success': True,
+            'filename': filename,
+            'filepath': filepath,
+            'recording_start': None,
+            'recording_end': None,
+            'recording_duration': None,
+            'recording_source': None
         }
 
-        print(f"\n{'='*60}")
-        print(f"[NEW JOB CREATED - upload/process_now]")
-        print(f"Job ID: {job_id}")
-        print(f"Video: {filepath}")
-        print(f"Model: {model_path}")
-        print(f"Total jobs in memory: {len(processing_jobs)}")
-        print(f"{'='*60}\n")
+        # Helper to interpret truthy form values
+        def _is_truthy(v):
+            if v is None:
+                return False
+            if isinstance(v, bool):
+                return v
+            s = str(v).strip().lower()
+            return s in ('1', 'true', 'yes', 'on')
 
-        # Persist a minimal job-sidecar on disk so other server workers/processes can discover this job_id
-        try:
-            job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-            os.makedirs(job_index_dir, exist_ok=True)
-            meta = {
-                'status': processing_jobs[job_id]['status'],
-                'output_dir': processing_jobs[job_id]['output_dir'],
-                'start_time': processing_jobs[job_id]['start_time'],
-                'video_path': filepath,
-                'user_id': processing_jobs[job_id].get('user_id')
+        # Check whether client asked to start processing immediately
+        process_now = request.form.get('process_now') or request.form.get('process') or request.args.get('process_now')
+        if _is_truthy(process_now):
+            # Must be an authenticated user to start a processing job
+            if 'user_id' not in session:
+                resp['warning'] = 'process_now requested but user is not authenticated; upload saved only.'
+                return jsonify(resp)
+
+            # Read optional processing parameters from the form (fall back to same defaults as /api/process)
+            model_name = request.form.get('model', 'best.pt')
+            try:
+                confidence = float(request.form.get('confidence', 0.25))
+            except Exception:
+                confidence = 0.25
+            try:
+                iou_threshold = float(request.form.get('iou_threshold', 0.5))
+            except Exception:
+                iou_threshold = 0.5
+            try:
+                max_age = int(request.form.get('max_age', 45))
+            except Exception:
+                max_age = 45
+            try:
+                min_hits = int(request.form.get('min_hits', 3))
+            except Exception:
+                min_hits = 3
+
+            # make sure we resolve relative to this module (works inside onefile exe)
+            base = os.path.dirname(os.path.abspath(__file__))
+            model_path = os.path.join(base, 'modal', model_name)
+            if not os.path.exists(model_path):
+                return jsonify({'error': 'Model file not found', 'model': model_name}), 400
+
+            # Create job entry (mirror behaviour of /api/process)
+            job_id = str(uuid.uuid4())
+            out_ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+            output_dir = os.path.join(app.config['OUTPUT_FOLDER'], f'tracking_{out_ts}')
+            # ensure the base unified_output folder exists; the actual job directory will be
+            # created later by the processor (or when exporting results) so we don't end up
+            # with two slightly different timestamps.
+            os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+            if os.path.exists(output_dir):
+                print(f"[INFO] output directory already exists, reusing: {output_dir}")
+
+            processing_jobs[job_id] = {
+                'status': 'initializing',
+                'progress': 0,
+                'total_frames': 0,
+                'processed_frames': 0,
+                'output_dir': output_dir,
+                'start_time': datetime.now().isoformat(),
+                'roi_enabled': False,
+                'user_id': session.get('user_id')
             }
-            with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
-                json.dump(meta, fh, ensure_ascii=False, indent=2)
-        except Exception as _e:
-            print(f"[WARN] could not write job index for {job_id}: {_e}")
 
-        # Start background processing thread (process_video_task will delete the uploaded file after processing)
-        thread = threading.Thread(
-            target=process_video_task,
-            args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
-        )
-        thread.daemon = True
-        thread.start()
+            print(f"\n{'='*60}")
+            print(f"[NEW JOB CREATED - upload/process_now]")
+            print(f"Job ID: {job_id}")
+            print(f"Video: {filepath}")
+            print(f"Model: {model_path}")
+            print(f"Total jobs in memory: {len(processing_jobs)}")
+            print(f"{'='*60}\n")
 
-        resp.update({
-            'job_id': job_id,
-            'analysis_id': job_id,
-            'output_dir': output_dir,
-            'processing_started': True
-        })
+            # NOTE: we intentionally no longer create a UUID-based sidecar directory under
+            # OUTPUT_FOLDER.  Those were only used for cross-process discovery and are
+            # deprecated by the newer in-memory job tracking system.
 
-    # Return upload response (possibly with processing info)
-    return jsonify(resp)
+            # Start background processing thread (process_video_task will delete the uploaded file after processing)
+            thread = threading.Thread(
+                target=process_video_task,
+                args=(job_id, filepath, model_path, output_dir, confidence, iou_threshold, max_age, min_hits, None)
+            )
+            thread.daemon = True
+            thread.start()
+
+            resp.update({
+                'job_id': job_id,
+                'analysis_id': job_id,
+                'output_dir': output_dir,
+                'processing_started': True
+            })
+
+        # Return upload response (possibly with processing info)
+        return jsonify(resp)
+    except Exception as e:
+        # unexpected failure; log stack trace and return generic 500
+        print(f"[ERROR] upload_video failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': 'internal_error', 'message': str(e)}), 500
 
 
 # Serve uploaded files (used for server-side converted files / thumbnails)
@@ -1967,18 +2227,23 @@ def process_video():
     if not video_path or not os.path.exists(video_path):
         return jsonify({'error': 'Video file not found'}), 400
     
-    model_path = os.path.join('modal', model_name)
+    base = os.path.dirname(os.path.abspath(__file__))
+    model_path = os.path.join(base, 'modal', model_name)
     if not os.path.exists(model_path):
         return jsonify({'error': 'Model file not found'}), 400
     
     # Create unique job ID
     job_id = str(uuid.uuid4())
     
-    # Create output directory
+    # Reserve a timestamped output directory path.  Do *not* mkdir yet; the
+    # processor will create the folder once work is complete.  This keeps
+    # folder-creation logic in one place and avoids two slightly different
+    # timestamps appearing side-by-side.
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     output_dir = os.path.join(app.config['OUTPUT_FOLDER'], f'tracking_{timestamp}')
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(os.path.join(output_dir, 'frames'), exist_ok=True)
+    os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
+    if os.path.exists(output_dir):
+        print(f"[INFO] output directory already exists, reusing: {output_dir}")
     
     # Initialize job (record owner so UI/history can show it)
     processing_jobs[job_id] = {
@@ -2001,21 +2266,10 @@ def process_video():
     print(f"Total jobs in memory: {len(processing_jobs)}")
     print(f"{'='*60}\n")
 
-    # Persist a minimal job-sidecar on disk so other server workers/processes can discover this job_id
-    try:
-        job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-        os.makedirs(job_index_dir, exist_ok=True)
-        meta = {
-            'status': processing_jobs[job_id]['status'],
-            'output_dir': processing_jobs[job_id]['output_dir'],
-            'start_time': processing_jobs[job_id]['start_time'],
-            'video_path': video_path,
-            'user_id': processing_jobs[job_id].get('user_id')
-        }
-        with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
-            json.dump(meta, fh, ensure_ascii=False, indent=2)
-    except Exception as _e:
-        print(f"[WARN] could not write job index for {job_id}: {_e}")
+    # NOTE: UUID-based job index folders are no longer created.  We rely on
+    # the in-memory `processing_jobs` structure and the output meta.json written
+    # inside the job's results directory instead.
+    pass
     
     # Start processing in background thread
     # package roi metadata and processing params to pass to background task
@@ -2098,10 +2352,18 @@ def process_video_task(job_id, video_path, model_path, output_dir, confidence, i
             device = 'cpu'
             print(f"[WARN] Could not detect CUDA: {e}. Using CPU")
         
+        # pass the caller-reserved output directory so that the processor
+        # does not invent its own timestamped folder (avoids duplicates).
+        # if the caller supplied an output_dir that already exists we will
+        # simply work inside it rather than inventing a new timestamp.  logging
+        # helps diagnose race conditions.
+        if os.path.exists(output_dir):
+            print(f"[INFO] processor reusing existing output_dir: {output_dir}")
+
         config = {
             "video_path": video_path,
             "model_path": model_path,
-            "out_dir": app.config['OUTPUT_FOLDER'],
+            "out_dir": output_dir,
             "device": device,
             "conf_threshold": confidence,
             "iou_threshold": iou_threshold,
@@ -2275,13 +2537,25 @@ def process_video_task(job_id, video_path, model_path, output_dir, confidence, i
         # Process video
         result = processor.process(progress_callback=progress_callback)
         
-        # Delete uploaded video after processing
+        # Delete uploaded video from root upload folder after processing
         try:
             if os.path.exists(video_path):
                 os.remove(video_path)
                 print(f"Deleted uploaded video: {video_path}")
         except Exception as delete_error:
             print(f"Warning: Could not delete uploaded video: {delete_error}")
+
+        # Historically we also removed a copy inside job-specific "uploads"
+        # because the processor used to duplicate the file.  That behaviour has
+        # been retired, but retain the cleanup guard in case external tools
+        # still create the folder for some odd reason.
+        try:
+            job_uploads = os.path.join(output_dir, 'uploads')
+            if os.path.isdir(job_uploads):
+                shutil.rmtree(job_uploads)
+                print(f"Deleted job-specific uploads folder: {job_uploads}")
+        except Exception as job_del_err:
+            print(f"Warning: could not remove job uploads folder: {job_del_err}")
         
         # Prepare result in compatible format
         if result and processor.root_out_dir:
@@ -2322,23 +2596,10 @@ def process_video_task(job_id, video_path, model_path, output_dir, confidence, i
             except Exception as _e:
                 print(f"[WARN] Failed to update output meta.json for job {job_id}: {_e}")
 
-            # Also write a small job-sidecar under OUTPUT_FOLDER/<job_id> pointing to the output_dir
-            try:
-                job_index_dir = os.path.join(app.config['OUTPUT_FOLDER'], job_id)
-                os.makedirs(job_index_dir, exist_ok=True)
-                index_meta = {
-                    'status': 'completed',
-                    'output_dir': str(processor.root_out_dir),
-                    'start_time': processing_jobs[job_id].get('start_time'),
-                    'end_time': processing_jobs[job_id].get('end_time'),
-                    'video_path': video_path,
-                    'analysis_id': job_id
-                }
-                with open(os.path.join(job_index_dir, 'meta.json'), 'w', encoding='utf-8') as fh:
-                    json.dump(index_meta, fh, ensure_ascii=False, indent=2)
-                print(f"Wrote job-sidecar for {job_id} -> {job_index_dir}")
-            except Exception as _e:
-                print(f"[WARN] could not write job index for {job_id} at completion: {_e}")
+            # job-sidecar writing has been retired; we no longer create a
+            # UUID-named directory in OUTPUT_FOLDER.  The canonical meta.json
+            # inside the actual output directory is sufficient for discovery.
+            pass
         
     except Exception as e:
         print(f"\n{'='*60}")
@@ -2568,6 +2829,15 @@ def get_low_confidence_tracks(job_id):
             strict_low_ids_adjusted = []
 
         # Build tracks_out only for the requested low ids
+        # eliminate potential duplicates while preserving order (prevents UI mismatches)
+        seen_ids = set()
+        unique_low_ids = []
+        for tid in strict_low_ids_adjusted:
+            if tid not in seen_ids:
+                seen_ids.add(tid)
+                unique_low_ids.append(tid)
+        strict_low_ids_adjusted = unique_low_ids
+
         tracks_out = []
 
         # find video path from meta.json if available
@@ -2605,9 +2875,16 @@ def get_low_confidence_tracks(job_id):
                 h, w = frame.shape[:2]
                 x1, y1, x2, y2 = bbox
                 x1 = max(0, int(x1)); y1 = max(0, int(y1)); x2 = min(w-1, int(x2)); y2 = min(h-1, int(y2))
-                if x2 <= x1 or y2 <= y1:
+                # compute crop dimensions and perform actual cropping
+                cw = x2 - x1
+                ch = y2 - y1
+                if cw <= 0 or ch <= 0:
                     print(f"Crop warning: invalid bbox for track at frame {fidx}: {bbox}")
                     return _placeholder_dataurl('Invalid bbox')
+                # extract the crop from the frame
+                crop = frame[y1:y2, x1:x2].copy() if frame is not None else None
+                if crop is None or crop.size == 0:
+                    print(f"Crop warning: empty crop for track at frame {fidx}: {bbox}")
                     return _placeholder_dataurl('Empty crop')
                 scale = min(1.0, float(max_dim) / max(cw, ch))
                 if scale < 1.0:
@@ -2964,19 +3241,20 @@ def correct_track(job_id):
 
         # Remove any stale per-track previews for this track so UI won't show outdated images
         try:
-            previews_dir = os.path.join(output_dir, 'previews') if output_dir else None
-            if previews_dir and os.path.exists(previews_dir):
-                removed = []
-                for fname in (f"track_{track_id}.png", f"track_{track_id}_large.png"):
-                    p = os.path.join(previews_dir, fname)
-                    if os.path.exists(p):
-                        try:
-                            os.remove(p)
-                            removed.append(p)
-                        except Exception as e:
-                            print(f"Failed to remove preview {p}: {e}")
-                if removed:
-                    print(f"Removed stale previews for track {track_id}: {removed}")
+            if action not in ('unclassify', 'ignore'):
+                previews_dir = os.path.join(output_dir, 'previews') if output_dir else None
+                if previews_dir and os.path.exists(previews_dir):
+                    removed = []
+                    for fname in (f"track_{track_id}.png", f"track_{track_id}_large.png"):
+                        p = os.path.join(previews_dir, fname)
+                        if os.path.exists(p):
+                            try:
+                                os.remove(p)
+                                removed.append(p)
+                            except Exception as e:
+                                print(f"Failed to remove preview {p}: {e}")
+                    if removed:
+                        print(f"Removed stale previews for track {track_id}: {removed}")
 
         # Attempt to regenerate preview for this single track (best shot logic)
                 try:
@@ -3303,6 +3581,9 @@ def correct_tracks(job_id):
             removed = 0
             if previews_dir and os.path.exists(previews_dir):
                 for it in items:
+                    action_it = it.get('action', 'set_class')
+                    if action_it in ('unclassify', 'ignore'):
+                        continue
                     tid = int(it.get('track_id'))
                     for fname in (f"track_{tid}.png", f"track_{tid}_large.png"):
                         p = os.path.join(previews_dir, fname)
@@ -3482,6 +3763,650 @@ def download_file(filepath):
     directory = os.path.dirname(abs_full)
     filename = os.path.basename(abs_full)
     return send_from_directory(directory, filename, as_attachment=True)
+
+
+
+# ------------------------------------------------------------------
+# Helper functions for timestamps/duration inference (OCR / metadata)
+# ------------------------------------------------------------------
+# cache OCR reader to avoid repeated initialization
+
+_ocr_reader = None
+_ocr_reader_gpu = False
+
+def _get_ocr_reader():
+    """Return a singleton easyocr.Reader, automatically enabling GPU if available.
+
+    If a GPU becomes available after the first call, the reader will be
+    recreated to leverage it.
+    """
+    global _ocr_reader, _ocr_reader_gpu
+    if not OCR_AVAILABLE:
+        return None
+
+    # check GPU status each time; if we have an existing reader but GPU
+    # becomes available, reinitialize with gpu=True
+    use_gpu = False
+    try:
+        import torch
+        if torch.cuda.is_available():
+            use_gpu = True
+    except ImportError:
+        pass
+
+    if _ocr_reader is not None:
+        if use_gpu and not _ocr_reader_gpu:
+            # recreate with GPU
+            try:
+                _ocr_reader = easyocr.Reader(['en'], gpu=True)
+                _ocr_reader_gpu = True
+            except Exception as e:
+                print(f"[OCR] GPU reader re-init failed: {e}")
+        return _ocr_reader
+
+    # no existing reader; create one
+    try:
+        _ocr_reader = easyocr.Reader(['en'], gpu=use_gpu)
+        _ocr_reader_gpu = use_gpu
+    except Exception as e:
+        print(f"[OCR] reader initialization failed: {e}")
+        _ocr_reader = None
+        _ocr_reader_gpu = False
+    return _ocr_reader
+
+
+def _ocr_timestamp(image_path):
+    """Run OCR on an image and try to extract a datetime string.
+
+    Returns a naive datetime object or None.
+    """
+    reader = _get_ocr_reader()
+    if not reader:
+        return None
+    try:
+        # load and convert to grayscale; easyocr sometimes trips on color images
+        import cv2
+        img = cv2.imread(image_path)
+        if img is None:
+            # fallback to direct path if cv2 fails
+            text = ' '.join(reader.readtext(image_path, detail=0))
+        else:
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            text = ' '.join(reader.readtext(gray, detail=0))
+        m = re.search(r"\d{4}-\d{2}-\d{2}\s\d{2}[.:]\d{2}[.:]\d{2}", text)
+        if m:
+            ts = m.group(0).replace('.', ':')
+            return datetime.fromisoformat(ts)
+        else:
+            # log extracted text for debugging
+            print(f"[OCR] no timestamp match. OCR text was: {text}")
+    except Exception as e:
+        print(f"[OCR] exception reading {image_path}: {e}")
+    return None
+
+
+def infer_timestamps_and_duration(analysis_dir, provided_start=None, provided_end=None):
+    """Try to infer start/end datetimes and duration from various sources.
+
+    - If provided_start/end are given they are parsed first.
+    - Next look for OCR frames under <analysis_dir>/frames.
+    - Fall back to meta.json and tracks.csv as previously done.
+
+    Returns tuple (start_dt, end_dt, duration_text).
+    """
+    start_dt = None
+    end_dt = None
+    duration_txt = None
+
+    # parse provided values
+    if provided_start:
+        try:
+            start_dt = datetime.fromisoformat(provided_start)
+        except Exception:
+            start_dt = None
+    if provided_end:
+        try:
+            end_dt = datetime.fromisoformat(provided_end)
+        except Exception:
+            end_dt = None
+
+    # attempt OCR if we still need either
+    frames_folder = os.path.join(analysis_dir, 'frames')
+    if os.path.isdir(frames_folder) and (not start_dt or not end_dt):
+        # look for first/last frame images (prefix based)
+        for fname in os.listdir(frames_folder):
+            if not fname.lower().startswith('frame_'):
+                continue
+            if 'first' in fname.lower() and not start_dt:
+                candidate = os.path.join(frames_folder, fname)
+                dt = _ocr_timestamp(candidate)
+                if dt:
+                    start_dt = start_dt or dt
+            if 'last' in fname.lower() and not end_dt:
+                candidate = os.path.join(frames_folder, fname)
+                dt = _ocr_timestamp(candidate)
+                if dt:
+                    end_dt = end_dt or dt
+
+    # try meta.json / tracks.csv if either missing
+    meta = {}
+    try:
+        meta_file = os.path.join(analysis_dir, 'meta.json')
+        if os.path.exists(meta_file):
+            with open(meta_file, 'r', encoding='utf-8') as f:
+                meta = json.load(f)
+    except Exception:
+        meta = {}
+
+    if (not start_dt or not end_dt) and os.path.exists(os.path.join(analysis_dir, 'tracks.csv')):
+        try:
+            df_tracks = pd.read_csv(os.path.join(analysis_dir, 'tracks.csv'))
+            if 'timestamp' in df_tracks.columns and df_tracks['timestamp'].notnull().any():
+                if not start_dt:
+                    start_dt = datetime.fromtimestamp(float(df_tracks['timestamp'].min()))
+                if not end_dt:
+                    end_dt = datetime.fromtimestamp(float(df_tracks['timestamp'].max()))
+        except Exception:
+            pass
+
+    # calculate duration text
+    if start_dt and end_dt:
+        if end_dt < start_dt:
+            duration_txt = 'Invalid (end before start)'
+        else:
+            dur = end_dt - start_dt
+            # strip microseconds
+            duration_txt = str(dur).split('.')[0]
+    elif meta.get('total_frames') and meta.get('fps'):
+        try:
+            dur_s = float(meta.get('total_frames')) / float(meta.get('fps', 30))
+            mins = int(dur_s // 60)
+            secs = int(dur_s % 60)
+            duration_txt = f"{mins} min {secs} sec"
+        except Exception:
+            duration_txt = None
+
+    return start_dt, end_dt, duration_txt
+
+# -----------------------------
+# API: Generate PDF report
+# -----------------------------
+
+@app.route('/api/report/metadata', methods=['GET'])
+@login_required
+def api_report_metadata():
+    """Return inferred start/end times and duration for an analysis or request.
+
+    Query parameters: analysis_id OR request_id
+    """
+    analysis_id = request.args.get('analysis_id')
+    request_id = request.args.get('request_id')
+
+    if request_id:
+        db = get_db()
+        req = db.execute('SELECT * FROM analysis_requests WHERE id = ?', (request_id,)).fetchone()
+        db.close()
+        if not req:
+            return jsonify({'error': 'Request not found'}), 404
+        if req['user_id'] != session.get('user_id') and session.get('role') != 'admin':
+            return jsonify({'error': 'Unauthorized'}), 403
+        analysis_dir = os.path.dirname(req['csv_path'])
+    elif analysis_id:
+        analysis_dir = os.path.join(app.config['OUTPUT_FOLDER'], analysis_id)
+        if not os.path.exists(analysis_dir):
+            return jsonify({'error': 'Analysis not found'}), 404
+    else:
+        return jsonify({'error': 'Missing analysis_id or request_id'}), 400
+
+    start_dt, end_dt, duration_txt = infer_timestamps_and_duration(analysis_dir)
+    result = {}
+    if start_dt:
+        result['start_time'] = start_dt.isoformat()
+    if end_dt:
+        result['end_time'] = end_dt.isoformat()
+    if duration_txt:
+        result['duration'] = duration_txt
+    return jsonify(result)
+
+
+@app.route('/api/report/generate', methods=['POST'])
+@login_required
+def api_generate_report():
+    """Generate a PDF report from analysis results (tracks + results files).
+
+    Accepts JSON: { analysis_id?, request_id?, start_time?, end_time?, location? }
+    Returns: application/pdf (binary)
+    """
+    # lazy import in case reportlab was installed after app import
+    global REPORTLAB_AVAILABLE
+    # also ensure all ReportLab symbols are treated as globals so they aren't
+    # considered local to this function and avoid "referenced before assignment"
+    global A4, SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    global getSampleStyleSheet, ParagraphStyle, colors
+
+    if not REPORTLAB_AVAILABLE:
+        # clear any partial import state and try again
+        import importlib
+        for key in list(sys.modules):
+            if key == 'reportlab' or key.startswith('reportlab.'):
+                del sys.modules[key]
+        try:
+            # import modules and assign symbols to globals
+            pagesizes = importlib.import_module('reportlab.lib.pagesizes')
+            A4 = pagesizes.A4
+            platypus = importlib.import_module('reportlab.platypus')
+            SimpleDocTemplate = platypus.SimpleDocTemplate
+            Paragraph = platypus.Paragraph
+            Spacer = platypus.Spacer
+            Table = platypus.Table
+            TableStyle = platypus.TableStyle
+            styles_mod = importlib.import_module('reportlab.lib.styles')
+            getSampleStyleSheet = styles_mod.getSampleStyleSheet
+            ParagraphStyle = styles_mod.ParagraphStyle
+            colors = importlib.import_module('reportlab.lib.colors')
+            REPORTLAB_AVAILABLE = True
+        except ImportError:
+            REPORTLAB_AVAILABLE = False
+    if not REPORTLAB_AVAILABLE:
+        return jsonify({'error': 'PDF generation unavailable: reportlab not installed'}), 500
+
+    data = request.get_json() or {}
+    analysis_id = data.get('analysis_id')
+    request_id = data.get('request_id')
+    start_time = data.get('start_time')
+    end_time = data.get('end_time')
+    raw_location = (data.get('location') or '').strip()
+    camera_direction = (data.get('camera_direction') or '').strip()
+    # attempt to split coordinates from location if in parentheses
+    import re
+    coords = ''
+    location = raw_location
+    m = re.match(r'^(.*)\s*\(([-0-9.,\s]+)\)\s*$', raw_location)
+    if m:
+        location = m.group(1).strip()
+        coords = m.group(2).strip()
+    # front-end video metadata (optional)
+    filename = data.get('filename')
+    file_size = data.get('file_size')
+    video_duration = data.get('video_duration')
+
+    # required fields validation
+    if not start_time or not end_time or not location or not camera_direction:
+        return jsonify({'error': 'Missing required report fields (start_time, end_time, location, camera_direction)'}), 400
+
+    # Resolve CSV path / analysis directory
+    if request_id:
+        db = get_db()
+        req = db.execute('SELECT * FROM analysis_requests WHERE id = ?', (request_id,)).fetchone()
+        db.close()
+        if not req:
+            return jsonify({'error': 'Request not found'}), 404
+        csv_path = req['csv_path']
+        if not csv_path or not os.path.exists(csv_path):
+            return jsonify({'error': 'tracks.csv not found for request'}), 404
+        analysis_dir = os.path.dirname(csv_path)
+        # ownership check
+        if req['user_id'] != session.get('user_id') and session.get('role') != 'admin':
+            return jsonify({'error': 'Unauthorized'}), 403
+    elif analysis_id:
+        analysis_dir = os.path.join(app.config['OUTPUT_FOLDER'], analysis_id)
+        csv_path = os.path.join(analysis_dir, 'tracks.csv')
+        if not os.path.exists(csv_path):
+            return jsonify({'error': 'tracks.csv not found for analysis_id'}), 404
+        # ownership check (if analysis is associated with a saved request)
+        db = get_db()
+        entry = db.execute('SELECT * FROM analysis_requests WHERE results_path LIKE ? OR csv_path LIKE ? LIMIT 1', (f'%{analysis_id}%', f'%{analysis_id}%')).fetchone()
+        db.close()
+        if entry:
+            if entry['user_id'] != session.get('user_id') and session.get('role') != 'admin':
+                return jsonify({'error': 'Unauthorized'}), 403
+        else:
+            # analysis folder has no DB entry -> restrict to admin
+            if session.get('role') != 'admin':
+                return jsonify({'error': 'Unauthorized'}), 403
+    else:
+        return jsonify({'error': 'Missing analysis_id or request_id'}), 400
+
+    # locate results directory (handle line_drawing subfolder for request-backed outputs)
+    candidates = [
+        os.path.join(analysis_dir, 'results', 'line_drawing'),
+        os.path.join(analysis_dir, 'results'),
+        os.path.join(analysis_dir)
+    ]
+    results_dir = None
+    for c in candidates:
+        if os.path.exists(c):
+            results_dir = c
+            break
+    if results_dir is None:
+        results_dir = os.path.join(analysis_dir, 'results')
+
+    # Load CSVs (crossed pairs, totals, od matrices)
+    try:
+        crossed_path = os.path.join(results_dir, 'crossed_pairs.csv')
+        totals_path = os.path.join(results_dir, 'totals.csv')
+        od_path = os.path.join(results_dir, 'od_matrix.csv')
+        od_by_type_path = os.path.join(results_dir, 'od_matrix_by_type.csv')
+
+        crossed_df = pd.read_csv(crossed_path) if os.path.exists(crossed_path) else pd.DataFrame()
+        if os.path.exists(totals_path):
+            totals_df = pd.read_csv(totals_path)
+        else:
+            if not crossed_df.empty:
+                totals_df = crossed_df['vehicle_type'].value_counts().reset_index()
+                totals_df.columns = ['vehicle_type', 'count']
+            else:
+                totals_df = pd.DataFrame(columns=['vehicle_type', 'count'])
+
+        od_df = pd.read_csv(od_path) if os.path.exists(od_path) else pd.DataFrame()
+    except Exception as e:
+        return jsonify({'error': 'Failed to load result files: ' + str(e)}), 500
+
+    total_vehicles = int(totals_df['count'].sum()) if not totals_df.empty else 0
+    totals_list = totals_df.to_dict('records')
+
+    # add percentages
+    heavy_count = 0
+    for r in totals_list:
+        cnt = int(r.get('count', 0))
+        r['pct'] = round((cnt / total_vehicles * 100) if total_vehicles else 0, 1)
+        if str(r.get('vehicle_type','')).lower() in ('bus', 'truck'):
+            heavy_count += cnt
+    heavy_pct = round((heavy_count / total_vehicles * 100) if total_vehicles else 0, 1)
+
+    # Build OD pivot (overall)
+    od_table = None
+    od_rows_for_pdf = []
+    try:
+        if not od_df.empty:
+            if 'total' in od_df.columns:
+                pivot = od_df.pivot(index='in_name', columns='out_name', values='total').fillna(0).astype(int)
+            else:
+                # sum non-meta cols as total
+                meta_cols = set(['in_leg','out_leg','in_name','out_name'])
+                type_cols = [c for c in od_df.columns if c not in meta_cols]
+                if type_cols:
+                    od_df['total'] = od_df[type_cols].sum(axis=1)
+                    pivot = od_df.pivot(index='in_name', columns='out_name', values='total').fillna(0).astype(int)
+                else:
+                    pivot = pd.DataFrame()
+            od_table = pivot
+            header = ['IN → OUT'] + list(pivot.columns)
+            od_rows_for_pdf.append(header)
+            for idx in pivot.index:
+                od_rows_for_pdf.append([idx] + [int(pivot.loc[idx, c]) for c in pivot.columns])
+    except Exception:
+        od_table = None
+
+    # Heavy vehicle OD (bus + truck)
+    heavy_od_rows = []
+    try:
+        heavy_pivot = None
+        if not od_df.empty and ('bus' in od_df.columns or 'truck' in od_df.columns):
+            od_df['heavy_total'] = od_df.get('bus', 0) + od_df.get('truck', 0)
+            heavy_pivot = od_df.pivot(index='in_name', columns='out_name', values='heavy_total').fillna(0).astype(int)
+        elif not crossed_df.empty:
+            heavy_df = crossed_df[crossed_df['vehicle_type'].str.lower().isin(['bus','truck'])]
+            if not heavy_df.empty:
+                heavy_pivot = pd.pivot_table(heavy_df, index='in_name', columns='out_name', values='track_id', aggfunc='count', fill_value=0)
+        if heavy_pivot is not None and not heavy_pivot.empty:
+            heavy_od_rows.append(['IN → OUT'] + list(heavy_pivot.columns))
+            for idx in heavy_pivot.index:
+                heavy_od_rows.append([idx] + [int(heavy_pivot.loc[idx, c]) for c in heavy_pivot.columns])
+    except Exception:
+        heavy_od_rows = []
+
+    # Determine recording times / duration (use unified helper)
+    start_dt, end_dt, _ = infer_timestamps_and_duration(
+        analysis_dir, provided_start=start_time, provided_end=end_time
+    )
+    # choose duration: prefer frontend metadata if supplied, else keep inferred
+    if video_duration:
+        duration_txt = video_duration
+    else:
+        # infer_timestamps_and_duration previously returned its own duration in variable _ (ignored above)
+        # but we can recompute quickly if start/end available
+        if start_dt and end_dt:
+            dur = end_dt - start_dt
+            duration_txt = str(dur).split('.')[0]
+        else:
+            duration_txt = 'N/A'
+
+    # Build PDF (ReportLab)
+    try:
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=36,leftMargin=36, topMargin=36,bottomMargin=36)
+        styles = getSampleStyleSheet()
+        story = []
+
+        # -- custom color palette for report ------------------------------------------------
+        PRIMARY = colors.HexColor("#3b82f6")   # Blue
+        DARK = colors.HexColor("#1e293b")      # Dark slate
+        GRAY_BG = colors.HexColor("#f1f5f9")   # Soft gray
+        TEXT = colors.HexColor("#0f172a")      # Almost black
+        GRID = colors.HexColor("#cbd5e1")      # Light grid
+
+        # add or override styles for modern typography
+        # Title style left-aligned
+        styles.add(ParagraphStyle(name='TitleLeft', parent=styles['Title'],
+                                  alignment=0, fontSize=24, leading=28,
+                                  textColor=TEXT, spaceAfter=18, spaceBefore=6))
+        styles.add(ParagraphStyle(name='SectionHeader', parent=styles['Heading2'],
+                                  alignment=0, fontSize=14, leading=18,
+                                  textColor=colors.white, backColor=PRIMARY,
+                                  leftIndent=0, spaceBefore=12, spaceAfter=6,
+                                  padding=4))
+        styles.add(ParagraphStyle(name='NormalText', parent=styles['BodyText'],
+                                  fontSize=10, leading=12, textColor=TEXT,
+                                  spaceAfter=6))
+
+        # helper to insert a left‑aligned section header with colored bar
+        def add_section(text):
+            # use Paragraph style for clean text + background
+            story.append(Paragraph(text, styles['SectionHeader']))
+            story.append(Spacer(1, 8))
+
+        # shared table styling (clean grid, light backgrounds, soft borders)
+        default_table_style = TableStyle([
+            ('GRID',(0,0),(-1,-1),0.25,GRID),
+            ('BACKGROUND',(0,0),(-1,0),GRAY_BG),
+            ('TEXTCOLOR',(0,0),(-1,0),DARK),
+            ('FONTNAME',(0,0),(-1,0),'Helvetica-Bold'),
+            ('ALIGN',(0,0),(-1,-1),'LEFT'),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('LEFTPADDING',(0,0),(-1,-1),4),
+            ('RIGHTPADDING',(0,0),(-1,-1),4),
+            ('TOPPADDING',(0,0),(-1,-1),2),
+            ('BOTTOMPADDING',(0,0),(-1,-1),2),
+            ('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white, GRAY_BG]),
+        ])
+
+        # header row: logo left + report date right
+        report_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        logo_path = os.path.join(app.static_folder or 'static', 'logo.png')
+        hdr_cells = []
+        if os.path.exists(logo_path):
+            try:
+                from reportlab.platypus import Image
+                img = Image(logo_path, width=120, height=60)
+                hdr_cells.append(img)
+            except Exception:
+                hdr_cells.append('')
+        else:
+            hdr_cells.append('')
+        hdr_cells.append(Paragraph(report_date, styles['NormalText']))
+        hdr_tbl = Table([hdr_cells], colWidths=[doc.width*0.5, doc.width*0.5])
+        hdr_tbl.setStyle(TableStyle([
+            ('ALIGN',(0,0),(0,0),'LEFT'),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('ALIGN',(1,0),(1,0),'RIGHT'),
+            ('BOTTOMPADDING',(0,0),(-1,-1),6)
+        ]))
+        story.append(hdr_tbl)
+        story.append(Spacer(1, 12))
+
+        # truncate long location for display
+        def truncate(text, maxlen=50):
+            if not text:
+                return ''
+            return text if len(text) <= maxlen else text[:maxlen-3] + '...'
+
+        display_location = truncate(location)
+        # detect Arabic characters to set alignment
+        arabic_style = styles['NormalText']
+        if re.search('[\u0600-\u06FF]', display_location):
+            arabic_style = ParagraphStyle(name='Arabic', parent=styles['NormalText'], alignment=2)
+
+        title = f"Traffic Analysis Report - {display_location or os.path.basename(analysis_dir)}"
+        story.append(Paragraph(title, styles['TitleLeft']))
+        story.append(Spacer(1, 12))
+
+        # header info table containing user-supplied metadata
+        info_data = [
+            ['Start Time:', start_dt.isoformat() if start_dt else ''],
+            ['End Time:', end_dt.isoformat() if end_dt else ''],
+            ['Location:', display_location],
+        ]
+        if coords:
+            info_data.append(['Coordinates:', coords])
+        info_data.append(['Camera Direction:', camera_direction])
+        # if Arabic detected wrap the location text in a paragraph with right alignment
+        if arabic_style.name == 'Arabic':
+            for r in info_data:
+                if r[0] == 'Location:':
+                    r[1] = Paragraph(display_location, arabic_style)
+                    break
+
+        info_tbl = Table(info_data, colWidths=[doc.width * 0.2, doc.width * 0.8])
+        info_tbl.setStyle(TableStyle([
+            ('ALIGN',(0,0),(0,-1),'LEFT'),
+            ('ALIGN',(1,0),(1,-1),'LEFT'),
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+            ('FONTNAME',(0,0),(-1,-1),'Helvetica'),
+            ('FONTSIZE',(0,0),(-1,-1),10),
+            ('BOTTOMPADDING',(0,0),(-1,-1),2),
+        ]))
+        story.append(info_tbl)
+        story.append(Spacer(1, 12))
+
+        # Recording details table
+        # recording details table now includes file metadata when available
+        rec_data = []
+        if filename:
+            rec_data.append(['Filename', filename])
+        if file_size is not None:
+            try:
+                size_mb = float(file_size) / (1024 * 1024)
+                rec_data.append(['File Size', f"{size_mb:.2f} MB"])
+            except Exception:
+                rec_data.append(['File Size', str(file_size)])
+        rec_data.extend([
+            ['Start Time', start_dt.isoformat() if start_dt else 'N/A'],
+            ['End Time', end_dt.isoformat() if end_dt else 'N/A'],
+            ['Duration', duration_txt],
+            ['Location', location or 'N/A']
+        ])
+        rec_tbl = Table(rec_data, colWidths=[140, 340])
+        rec_tbl.setStyle(default_table_style)
+        story.append(rec_tbl)
+        story.append(Spacer(1, 12))
+
+        # 1) Vehicle Count Summary
+        add_section('1) Vehicle Count Summary')
+        vc_rows = [['Vehicle Type','Count','%']]
+        for r in totals_list:
+            vc_rows.append([str(r.get('vehicle_type','')), str(r.get('count',0)), f"{r.get('pct',0)}%"])
+        vc_tbl = Table(vc_rows, colWidths=[220,100,80])
+        vc_tbl.setStyle(default_table_style)
+        story.append(vc_tbl)
+        story.append(Spacer(1,8))
+
+        # Observations
+        obs = []
+        if totals_list:
+            top = max(totals_list, key=lambda x: x.get('count',0))
+            obs.append(f"{top.get('vehicle_type','').capitalize()} represent the vast majority of traffic (~{top.get('pct',0)}%).")
+        if heavy_count:
+            obs.append(f"Heavy vehicles (buses + trucks) account for a small portion (~{heavy_pct}%).")
+        story.append(Paragraph('Observations:', styles['NormalText']))
+        story.append(Paragraph(' '.join(obs) if obs else 'No observations available.', styles['Normal']))
+        story.append(Spacer(1,12))
+
+        # 2) OD Matrix overall
+        story.append(Paragraph('2) OD Matrix (Origin → Destination) – Overall', styles['Heading2']))
+        if od_table is None or od_table.empty:
+            story.append(Paragraph('OD data not available for this analysis.', styles['Normal']))
+        else:
+            od_tbl = Table(od_rows_for_pdf, colWidths=None)
+            od_tbl.setStyle(default_table_style)
+            story.append(od_tbl)
+            # interpretation
+            flat = od_table.stack().reset_index()
+            flat.columns = ['in_name','out_name','count']
+            flat = flat[flat['count']>0].sort_values('count', ascending=False)
+            if not flat.empty:
+                tp = flat.iloc[0]
+                story.append(Paragraph(f"Most vehicles entering from {tp['in_name']} exited through {tp['out_name']} ({int(tp['count'])} vehicles).", styles['Normal']))
+        story.append(Spacer(1,12))
+
+        # 3) OD Matrix - heavy vehicles
+        add_section('3) OD Matrix – Heavy Vehicles (Bus & Truck)')
+        if not heavy_od_rows:
+            story.append(Paragraph('No heavy-vehicle OD records available.', styles['Normal']))
+        else:
+            hv_tbl = Table(heavy_od_rows)
+            hv_tbl.setStyle(default_table_style)
+            story.append(hv_tbl)
+        story.append(Spacer(1,12))
+
+        # 4) Key Insights
+        add_section('4) Key Insights')
+        insights = []
+        if totals_list:
+            insights.append(f"Traffic during the monitoring period is predominantly composed of {top.get('vehicle_type','')}.")
+        if od_table is not None and not od_table.empty:
+            insights.append('The intersection/location shows strong directional exchange between the main legs.')
+            diag = 0
+            for i in od_table.index:
+                if i in od_table.columns:
+                    diag += int(od_table.loc[i, i])
+            if total_vehicles:
+                insights.append(f"Same-entry/same-exit movements are nearly nonexistent ({round(diag/total_vehicles*100,1)}% of cases).")
+        if heavy_count:
+            insights.append('Heavy vehicle impact on traffic dynamics during this period is limited.')
+
+        for ins in insights:
+            story.append(Paragraph('- ' + ins, styles['NormalText']))
+
+        # page header and footer functions for professional layout
+        def _header(canvas, doc):
+            canvas.saveState()
+            canvas.setFillColor(PRIMARY)
+            canvas.rect(0, doc.pagesize[1] - 36, doc.pagesize[0], 36, fill=1, stroke=0)
+            canvas.setFillColor(colors.white)
+            canvas.setFont('Helvetica-Bold', 12)
+            canvas.drawString(doc.leftMargin, doc.pagesize[1] - 24, title)
+            canvas.restoreState()
+
+        gen_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        system_info = f"Python {sys.version.split()[0]}"  # simple system info
+        def _footer(canvas, doc):
+            canvas.saveState()
+            canvas.setFont('Helvetica', 9)
+            canvas.setFillColor(TEXT)
+            page_num = canvas.getPageNumber()
+            canvas.drawString(doc.leftMargin, 15, f"Generated: {gen_timestamp} | {system_info}")
+            canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 15, f"Page {page_num}")
+            canvas.restoreState()
+
+        doc.build(story,
+                  onFirstPage=lambda c,d: (_header(c,d), _footer(c,d)),
+                  onLaterPages=lambda c,d: (_header(c,d), _footer(c,d)))
+        pdf_bytes = buffer.getvalue()
+        buffer.close()
+        return Response(pdf_bytes, mimetype='application/pdf')
+    except Exception as e:
+        return jsonify({'error': 'PDF generation failed: ' + str(e)}), 500
 
 @app.route('/api/delete_result/<folder_name>', methods=['DELETE'])
 @login_required
@@ -4422,7 +5347,13 @@ except Exception:
 
 @app.route('/api/line_drawing/calculate', methods=['POST'])
 def calculate_crossings():
-    """Calculate vehicle crossings based on drawn lines"""
+    """Calculate vehicle crossings based on drawn lines
+    
+    Before counting, broken tracks are stitched together (relinked) so that
+    temporarily lost vehicles that resume with a new `track_id` are merged.
+    The relinking logic considers spatial proximity, frame gap, vehicle type,
+    and movement direction (configurable thresholds in track_relinking.py).
+    """
     try:
         data = request.json
         analysis_id = data.get('analysis_id')
@@ -4435,6 +5366,8 @@ def calculate_crossings():
         canvas_height = data.get('canvas_height')
         image_width = data.get('image_width')
         image_height = data.get('image_height')
+        # Optional segmentation interval (minutes)
+        segment_interval_minutes = int(data.get('segment_interval_minutes') or 0)
         
         # Scale factor from canvas to original image
         scale_x = image_width / canvas_width
@@ -4510,6 +5443,21 @@ def calculate_crossings():
         df = pd.read_csv(csv_path)
         df = ensure_xy_columns(df)
         
+        # stitch broken tracks (merge split track_ids) before analysis
+        try:
+            from track_relinking import relink_trajectories
+            # allow calling code to specify thresholds if desired
+            frame_thresh = data.get('relink_frame_threshold', 10)
+            dist_thresh = data.get('relink_distance_threshold', 50.0)
+            angle_thresh = data.get('relink_angle_threshold', 45.0)
+            df = relink_trajectories(df,
+                                      frame_threshold=frame_thresh,
+                                      distance_threshold=dist_thresh,
+                                      angle_threshold=angle_thresh)
+        except Exception as e:
+            # if relinking fails for any reason, continue with original df
+            print('⚠️ track relinking failed:', e)
+        
         # Calculate crossings
         crossed = []
         for tid, g in df.groupby("track_id"):
@@ -4526,6 +5474,34 @@ def calculate_crossings():
         # Create results
         crossed_df = pd.DataFrame(crossed, columns=["track_id", "vehicle_type", "in_leg", "out_leg"])
         
+        # Compute crossing timestamps (seconds) for each detected crossing where possible
+        timestamps = []
+        for _, row in crossed_df.iterrows():
+            tid = int(row['track_id'])
+            track_df = df[df['track_id'] == tid]
+            ts = None
+            try:
+                in_leg = int(row['in_leg']) if not pd.isna(row['in_leg']) else None
+            except Exception:
+                in_leg = None
+            try:
+                out_leg = int(row['out_leg']) if not pd.isna(row['out_leg']) else None
+            except Exception:
+                out_leg = None
+
+            # Prefer IN crossing timestamp (when available), otherwise OUT
+            if in_leg and (in_leg - 1) < len(lines_in) and lines_in[in_leg - 1]:
+                ts = get_crossing_timestamp(track_df, lines_in[in_leg - 1])
+            if ts is None and out_leg and (out_leg - 1) < len(lines_out) and lines_out[out_leg - 1]:
+                ts = get_crossing_timestamp(track_df, lines_out[out_leg - 1])
+
+            timestamps.append(float(ts) if ts is not None else None)
+
+        crossed_df['timestamp'] = timestamps
+
+        # Placeholder for calculated segments (filled later if requested)
+        segments = []
+
         # Determine results directory
         if request_id:
             # Use request folder
@@ -4591,24 +5567,123 @@ def calculate_crossings():
                 })
         pd.DataFrame(long_rows).to_csv(od_by_type_path, index=False)
         
+        # Compute video duration (seconds) and optional time-based segments
+        duration_seconds = None
+        if 'timestamp' in df.columns and df['timestamp'].notnull().any():
+            try:
+                duration_seconds = float(df['timestamp'].max() - df['timestamp'].min())
+            except Exception:
+                duration_seconds = None
+        elif 'frame_idx' in df.columns:
+            # assume 30 FPS when only frame index is available
+            fps = 30.0
+            try:
+                duration_seconds = float(df['frame_idx'].max() / fps)
+            except Exception:
+                duration_seconds = None
+
+        # If user requested segmentation, build per-interval summaries
+        if segment_interval_minutes and duration_seconds and duration_seconds > 0:
+            try:
+                import math
+                interval_s = int(segment_interval_minutes) * 60
+                n_segments = int(math.ceil(duration_seconds / interval_s))
+                for s in range(n_segments):
+                    start_s = s * interval_s
+                    end_s = min((s + 1) * interval_s, duration_seconds)
+
+                    seg_rows = crossed_df[(crossed_df['timestamp'].notnull()) &
+                                          (crossed_df['timestamp'] >= start_s) &
+                                          (crossed_df['timestamp'] < end_s)]
+
+                    seg_totals = seg_rows['vehicle_type'].value_counts().reset_index()
+                    seg_totals.columns = ['vehicle_type', 'count']
+                    seg_totals_list = seg_totals.to_dict('records') if not seg_totals.empty else []
+
+                    # Build per-segment OD rows (same schema as overall od_rows)
+                    seg_od_rows = []
+                    for i in range(1, len(leg_names_in) + 1):
+                        din = seg_rows[seg_rows['in_leg'] == i]
+                        for j in range(1, len(leg_names_out) + 1):
+                            pair = din[din['out_leg'] == j]
+                            row = {
+                                'in_leg': i,
+                                'in_name': leg_names_in[i - 1],
+                                'out_leg': j,
+                                'out_name': leg_names_out[j - 1]
+                            }
+                            total_ij = 0
+                            for vt in vehicle_types:
+                                c = int((pair['vehicle_type'] == vt).sum())
+                                row[vt] = c
+                                total_ij += c
+                            row['total'] = total_ij
+                            seg_od_rows.append(row)
+
+                    # Build od_summary for quick display (only non-zero pairs)
+                    seg_od_summary = {}
+                    for r in seg_od_rows:
+                        if r['total'] > 0:
+                            seg_od_summary[f"{r['in_name']} → {r['out_name']}"] = r['total']
+
+                    segments.append({
+                        'index': s,
+                        'start_sec': float(start_s),
+                        'end_sec': float(end_s),
+                        'totals': seg_totals_list,
+                        'od_summary': seg_od_summary,
+                        'od_matrix_rows': seg_od_rows,
+                        'crossed_count': int(len(seg_rows)),
+                        'files': {
+                            'crossed': None,
+                            'od_matrix': None,
+                            'od_matrix_by_type': None,
+                            'od_excel': None
+                        }
+                    })
+            except Exception as e:
+                print(f"Warning: segmentation compute failed: {e}")
+
         # Create Excel with separate sheets
         excel_path = os.path.join(results_dir, 'od_matrices_by_vehicle.xlsx')
-        try:
-            with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-                for vt in vehicle_types:
-                    mat = pd.DataFrame(0, index=leg_names_in, columns=leg_names_out, dtype=int)
-                    sub = crossed_df[crossed_df["vehicle_type"] == vt]
-                    for i, in_name in enumerate(leg_names_in, start=1):
-                        for j, out_name in enumerate(leg_names_out, start=1):
-                            cnt = int(((sub["in_leg"] == i) & (sub["out_leg"] == j)).sum())
-                            mat.loc[in_name, out_name] = cnt
-                    mat.index.name = "IN_leg"
-                    mat.columns.name = "OUT_leg"
-                    sheet_name = vt.replace(" ", "_")[:31] or "type"
-                    mat.to_excel(writer, sheet_name=sheet_name)
-        except Exception as e:
-            print(f"Warning: Could not create Excel file: {e}")
+        excel_created = False
+        excel_error = None
+
+        # Try available Excel engines (prefer openpyxl, fallback to xlsxwriter)
+        for engine in ("openpyxl", "xlsxwriter"):
+            try:
+                with pd.ExcelWriter(excel_path, engine=engine) as writer:
+                    for vt in vehicle_types:
+                        mat = pd.DataFrame(0, index=leg_names_in, columns=leg_names_out, dtype=int)
+                        sub = crossed_df[crossed_df["vehicle_type"] == vt]
+                        for i, in_name in enumerate(leg_names_in, start=1):
+                            for j, out_name in enumerate(leg_names_out, start=1):
+                                cnt = int(((sub["in_leg"] == i) & (sub["out_leg"] == j)).sum())
+                                mat.loc[in_name, out_name] = cnt
+                        # add total row (sum across columns)
+                        total_row = mat.sum(axis=0)
+                        total_row.name = "Total"
+                        mat = pd.concat([mat, pd.DataFrame(total_row).T])
+                        mat.index.name = "IN_leg"
+                        mat.columns.name = "OUT_leg"
+                        sheet_name = vt.replace(" ", "_")[:31] or "type"
+                        mat.to_excel(writer, sheet_name=sheet_name)
+                excel_created = True
+                break
+            except Exception as e:
+                excel_error = e
+                # remove any partial file
+                try:
+                    if os.path.exists(excel_path):
+                        os.remove(excel_path)
+                except Exception:
+                    pass
+
+        if not excel_created:
+            print(f"Warning: Could not create Excel file (no engine available). Last error: {excel_error}")
             excel_path = None
+        else:
+            print(f"[OK] Excel file created: {excel_path}")
         
         # Generate debug overlay
         try:
@@ -4681,13 +5756,106 @@ def calculate_crossings():
             except Exception as e:
                 print(f"Warning: could not update request status for {request_id}: {e}")
 
+        # Persist per-segment CSVs (if any were computed) and prepare file list
+        crossed_segment_files = None
+        if segments:
+            crossed_segment_files = []
+            segment_od_matrix_files = []
+            segment_od_by_type_files = []
+            segment_od_excel_files = []
+
+            for seg in segments:
+                # save crossed pairs for the segment
+                seg_rows = crossed_df[(crossed_df['timestamp'].notnull()) &
+                                      (crossed_df['timestamp'] >= seg['start_sec']) &
+                                      (crossed_df['timestamp'] < seg['end_sec'])]
+
+                seg_crossed_name = f"crossed_pairs_segment_{seg['index']}.csv"
+                seg_crossed_path = os.path.join(results_dir, seg_crossed_name)
+                try:
+                    seg_rows.to_csv(seg_crossed_path, index=False)
+                except Exception:
+                    pass
+
+                # save od_matrix for the segment (wide table)
+                seg_od_name = f"od_matrix_segment_{seg['index']}.csv"
+                seg_od_path = os.path.join(results_dir, seg_od_name)
+                try:
+                    # rebuild a DataFrame like od_df but filtered to this segment
+                    seg_od_df = pd.DataFrame(seg.get('od_matrix_rows') or [])
+                    if seg_od_df.empty:
+                        # create header consistent with od_df
+                        cols = ['in_leg','in_name','out_leg','out_name'] + vehicle_types + ['total']
+                        seg_od_df = pd.DataFrame(columns=cols)
+                    seg_od_df.to_csv(seg_od_path, index=False)
+                except Exception:
+                    pass
+
+                # save od_matrix_by_type (long format) for this segment
+                seg_od_by_type_name = f"od_matrix_by_type_segment_{seg['index']}.csv"
+                seg_od_by_type_path = os.path.join(results_dir, seg_od_by_type_name)
+                try:
+                    long_rows_seg = []
+                    for r in (seg.get('od_matrix_rows') or []):
+                        for vt in vehicle_types:
+                            long_rows_seg.append({
+                                'in_leg': r['in_leg'],
+                                'in_name': r['in_name'],
+                                'out_leg': r['out_leg'],
+                                'out_name': r['out_name'],
+                                'vehicle_type': vt,
+                                'count': int(r.get(vt, 0))
+                            })
+                    pd.DataFrame(long_rows_seg).to_csv(seg_od_by_type_path, index=False)
+                except Exception:
+                    pass
+
+                # create per-segment excel (same layout as overall, per vehicle-type sheets)
+                seg_excel_name = f"od_matrices_by_vehicle_segment_{seg['index']}.xlsx"
+                seg_excel_path = os.path.join(results_dir, seg_excel_name)
+                try:
+                    with pd.ExcelWriter(seg_excel_path, engine='openpyxl') as writer:
+                        for vt in vehicle_types:
+                            mat = pd.DataFrame(0, index=leg_names_in, columns=leg_names_out, dtype=int)
+                            sub = seg_rows[seg_rows['vehicle_type'] == vt]
+                            for i, in_name in enumerate(leg_names_in, start=1):
+                                for j, out_name in enumerate(leg_names_out, start=1):
+                                    cnt = int(((sub['in_leg'] == i) & (sub['out_leg'] == j)).sum())
+                                    mat.loc[in_name, out_name] = cnt
+                            mat.index.name = 'IN_leg'
+                            mat.columns.name = 'OUT_leg'
+                            sheet_name = vt.replace(' ', '_')[:31] or 'type'
+                            mat.to_excel(writer, sheet_name=sheet_name)
+                    seg_excel_created = True
+                except Exception:
+                    seg_excel_created = False
+
+                # attach file references into segment and file-lists
+                seg['files']['crossed'] = f"{results_subpath}/{seg_crossed_name}"
+                seg['files']['od_matrix'] = f"{results_subpath}/{seg_od_name}"
+                seg['files']['od_matrix_by_type'] = f"{results_subpath}/{seg_od_by_type_name}"
+                seg['files']['od_excel'] = f"{results_subpath}/{seg_excel_name}" if seg_excel_created else None
+
+                crossed_segment_files.append(f"{results_subpath}/{seg_crossed_name}")
+                segment_od_matrix_files.append(f"{results_subpath}/{seg_od_name}")
+                segment_od_by_type_files.append(f"{results_subpath}/{seg_od_by_type_name}")
+                segment_od_excel_files.append(seg['files']['od_excel'])
+
+        else:
+            segment_od_matrix_files = None
+            segment_od_by_type_files = None
+            segment_od_excel_files = None
+
         return jsonify({
             'success': True,
             'request_completed': request_completed,
             'results': {
                 'total_crossed': len(crossed_df),
                 'totals': totals.to_dict('records'),
-                'od_summary': od_summary
+                'od_summary': od_summary,
+                'video_duration_seconds': duration_seconds,
+                'segment_interval_minutes': int(segment_interval_minutes) if segment_interval_minutes else 0,
+                'segments': segments
             },
             'files': {
                 'crossed': f'{results_subpath}/crossed_pairs.csv',
@@ -4695,7 +5863,12 @@ def calculate_crossings():
                 'od_matrix': f'{results_subpath}/od_matrix.csv',
                 'od_matrix_by_type': f'{results_subpath}/od_matrix_by_type.csv',
                 'od_excel': f'{results_subpath}/od_matrices_by_vehicle.xlsx' if excel_path else None,
-                'debug_overlay': f'{results_subpath}/debug_overlay.jpg' if debug_path else None
+                'od_excel_error': str(excel_error) if excel_error else None,
+                'debug_overlay': f'{results_subpath}/debug_overlay.jpg' if debug_path else None,
+                'crossed_segment_files': crossed_segment_files,
+                'segment_od_matrix_files': segment_od_matrix_files,
+                'segment_od_by_type_files': segment_od_by_type_files,
+                'segment_od_excel_files': segment_od_excel_files
             }
         })
         
@@ -4991,7 +6164,7 @@ def speed_analysis():
 
 if __name__ == '__main__':
     print("=" * 60)
-    print("Advanced Vehicle Tracking System")
+    print("TraffiCount Pro")
     print("High-precision tracking with stable IDs")
     print("=" * 60)
     print("\nStarting Flask server...")

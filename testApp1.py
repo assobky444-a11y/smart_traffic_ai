@@ -1,5 +1,5 @@
 """
-🚗 Vehicle Tracking - Part 1: Detection & Tracking Only (STABLE IDs EDITION)
+🚗 TraffiCount Pro - Part 1: Detection & Tracking Only (STABLE IDs EDITION)
 ===========================================================================
 Focus ONLY on:
   1) Select video
@@ -1402,7 +1402,18 @@ class VideoProcessorV1:
 
         self.mot = MOTV1(self.cfg, self.fps, (self.width, self.height), feature_extractor)
         self.last_df = None
-        self.root_out_dir = self.out_dir / f"tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # determine the final root output directory.  The caller may already
+        # have reserved a timestamped folder (for example app.py generates one
+        # at job creation) – in that case we should honour it and *not* append a
+        # second timestamp.  Otherwise we still compute our own unique name.
+        # if the caller already supplied a timestamped tracking folder, use it
+        # directly; otherwise build a new path.  we use `Path` (imported above)
+        if Path(self.out_dir).name.startswith("tracking_"):
+            # already a full job folder path
+            self.root_out_dir = Path(self.out_dir)
+        else:
+            self.root_out_dir = self.out_dir / f"tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
         # NOTE: Do NOT create the output folder here. Creating it during __init__ can produce
         # temporary/duplicate job folders if initialization runs multiple times (e.g. UI checks).
         # We will create the directory later in `process()` **only** after processing reaches
@@ -1638,23 +1649,14 @@ class VideoProcessorV1:
                 json.dump(meta, f, indent=2, ensure_ascii=False)
             logger.info(f"Saved: {meta_json}")
 
-            # 🎯 Copy source video into the job folder 'uploads/' so crops and previews remain available
-            try:
-                uploads_dir = self.root_out_dir / 'uploads'
-                uploads_dir.mkdir(exist_ok=True)
-                src = Path(self.video_path)
-                if src.exists():
-                    dst = uploads_dir / src.name
-                    if not dst.exists():
-                        import shutil
-                        shutil.copy2(str(src), str(dst))
-                        logger.info(f"Copied source video to: {dst}")
-                    else:
-                        logger.info(f"Source video already present in uploads: {dst}")
-                else:
-                    logger.warning(f"Source video file not found for copying: {src}")
-            except Exception as e:
-                logger.exception(f"Failed to copy source video into job uploads: {e}")
+            # 🎯 Formerly we copied the source video into a job-specific
+            # `uploads/` subfolder so the UI could serve it alongside exports.
+            # That duplication is unnecessary now; the central upload directory is
+            # used directly.  Skipping the copy entirely.
+            #
+            # (The matching cleanup logic in the Flask app will quietly remove
+            # any leftover `uploads/` folder if for some reason it still exists.)
+            pass
 
             if self.cfg.get("export_preview_frames", True):
                 logger.info("Exporting preview frames...")

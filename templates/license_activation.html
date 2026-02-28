@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>License Activation - TraffiCount Pro</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* reuse styles from login page but adjust spacing for two forms */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 100%;
+            max-width: 500px;
+            animation: slideUp 0.5s ease;
+        }
+        @keyframes slideUp {
+            from { opacity:0; transform: translateY(30px); }
+            to { opacity:1; transform: translateY(0); }
+        }
+        h1 { text-align: center; color:#333; margin-bottom:10px; font-size:28px; }
+        .subtitle { text-align:center; color:#666; margin-bottom:30px; font-size:14px; }
+        .alert { padding:12px 20px; border-radius:8px; margin-bottom:20px; font-size:14px; }
+        .alert-error { background:#fee; color:#c33; border:1px solid #fcc; }
+        .alert-success { background:#efe; color:#3c3; border:1px solid #cfc; }
+        .form-group { margin-bottom:25px; }
+        .form-group label { display:block; margin-bottom:8px; color:#333; font-weight:600; font-size:14px; }
+        .input-wrapper { position:relative; }
+        .input-wrapper i { position:absolute; right:15px; top:50%; transform:translateY(-50%); color:#667eea; }
+        .form-group input { width:100%; padding:14px 45px 14px 15px; border:2px solid #e0e0e0; border-radius:10px; font-size:15px; transition:all 0.3s; }
+        .form-group input:focus { outline:none; border-color:#667eea; box-shadow:0 0 0 3px rgba(102,126,234,0.1); }
+        .btn { width:100%; padding:15px; background:linear-gradient(135deg, #667eea 0%, #764ba2 100%); color:white; border:none; border-radius:10px; font-size:16px; font-weight:bold; cursor:pointer; transition:all 0.3s; margin-top:10px; }
+        .btn:hover { transform:translateY(-2px); box-shadow:0 10px 25px rgba(102,126,234,0.4); }
+        .btn:active { transform:translateY(0); }
+        .divider { text-align:center; margin:20px 0; color:#999; font-size:14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>License Activation</h1>
+        <p class="subtitle">TraffiCount Pro - please activate to continue</p>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">
+                        <i class="fas fa-{{ 'check-circle' if category == 'success' else 'exclamation-circle' }}"></i>
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if status_message %}
+            <div class="alert alert-error">
+                <i class="fas fa-exclamation-circle"></i> {{ status_message }}
+            </div>
+        {% endif %}
+
+        <form method="POST" action="{{ url_for('activate_license') }}">
+            {% if device_id %}
+                <p style="font-size:12px;color:#888;text-align:center;">Device ID: {{ device_id }}</p>
+            {% endif %}
+            <div class="form-group">
+                <label for="license_key"><i class="fas fa-key"></i> Enter License Key</label>
+                <div class="input-wrapper">
+                    <i class="fas fa-key"></i>
+                    <input type="text" id="license_key" name="license_key" required placeholder="LICENSE-XXXXX">
+                </div>
+            </div>
+            <button type="submit" class="btn"><i class="fas fa-check-circle"></i> Activate License</button>
+        </form>
+
+        {% if show_trial %}
+            <div class="divider">OR</div>
+
+            <form method="POST" action="{{ url_for('start_trial') }}">
+                <div class="form-group">
+                    <label for="email"><i class="fas fa-envelope"></i> Start Free Trial</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-envelope"></i>
+                        <input type="email" id="email" name="email" required placeholder="user@example.com">
+                    </div>
+                </div>
+                <button type="submit" class="btn"><i class="fas fa-rocket"></i> Start Free Trial</button>
+            </form>
+
+            <div class="divider">OR</div>
+
+            <form method="POST" action="{{ url_for('verify_existing_trial') }}">
+                <div class="form-group">
+                    <label for="trial_key"><i class="fas fa-key"></i> Verify Trial Key</label>
+                    <div class="input-wrapper">
+                        <i class="fas fa-key"></i>
+                        <input type="text" id="trial_key" name="trial_key" required placeholder="TRIAL-XXXXX">
+                    </div>
+                </div>
+                <button type="submit" class="btn"><i class="fas fa-search"></i> Verify Trial</button>
+            </form>
+        {% endif %}
+    </div>
+</body>
+</html>

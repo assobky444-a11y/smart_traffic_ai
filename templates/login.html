@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - Vehicle Tracking System</title>
+    <title>Login - TraffiCount Pro</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * {
@@ -201,7 +201,7 @@
         </div>
 
         <h1>Login</h1>
-        <p class="subtitle">Advanced Vehicle Tracking and Analysis System</p>
+        <p class="subtitle">TraffiCount Pro - Tracking & Analysis</p>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -214,11 +214,6 @@
             {% endif %}
         {% endwith %}
 
-        <div class="info-box">
-            <p><i class="fas fa-info-circle"></i> <strong>Demo Account:</strong></p>
-            <p>• Admin: admin / admin123</p>
-            <p>• Or create a new account</p>
-        </div>
 
         <form method="POST" action="{{ url_for('login') }}">
             <div class="form-group">
@@ -250,6 +245,7 @@
 
         <div class="links">
             <p>Don't have an account? <a href="{{ url_for('register') }}">Create New Account</a></p>
+            <p>Need to activate your copy? <a href="{{ url_for('license_activation') }}">License Activation</a></p>
         </div>
     </div>
 </body>

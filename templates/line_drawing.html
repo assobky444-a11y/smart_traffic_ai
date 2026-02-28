@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Line Drawing - Vehicle Tracking System</title>
+    <title>Line Drawing - TraffiCount Pro</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='dark-theme.css') }}">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Google Maps JS API will be injected dynamically when the report modal opens -->
     <style>
         .canvas-container {
             position: relative;
@@ -148,6 +149,16 @@
             gap: 15px;
             align-items: center;
         }
+        /* category filter button active state */
+        .od-type-tab {
+            transition: all 0.3s;
+        }
+        .od-type-tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #3b82f6 100%);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
 
         .nav-links a {
             color: white;
@@ -190,11 +201,116 @@
             to { transform: rotate(360deg); }
         }
 
+        /* Modal for Generate Report */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+        }
+        .modal-dialog {
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            padding: 18px;
+            border-radius: 10px;
+            width: 520px;
+            max-width: 94%;
+            box-shadow: var(--shadow);
+        }
+        .modal-dialog h3 { margin-top:0; margin-bottom:8px; }
+        .modal-actions { display:flex; gap:10px; justify-content:flex-end; margin-top:14px; }
+
+        /* Custom map styling */
+        #reportMap {
+            width: 100%;
+            height: 400px; /* comfortable size between 350-450 */
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.25);
+            margin-bottom: 6px;
+        }
+
+        /* Autocomplete dropdown professional look */
+        .pac-container {
+            z-index: 10001 !important; /* appear above modal overlay */
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        .pac-item {
+            padding: 8px 12px;
+            line-height: 1.4;
+        }
+        .pac-item span {
+            color: #555;
+        }
+
         .btn.disabled, .btn:disabled {
             opacity: 0.6;
             cursor: not-allowed;
         }
-    </style>
+
+        /* Segmented outputs accordion */
+        .segment-accordion { margin-top: 12px; }
+        .segment-item { border-radius: 8px; margin: 10px 0; overflow: hidden; border: 1px solid rgba(255,255,255,0.03); background: var(--bg-secondary); }
+        .segment-header { width: 100%; text-align: left; padding: 12px 14px; background: rgba(255,255,255,0.02); border: none; display:flex; justify-content:space-between; align-items:center; font-weight:700; cursor:pointer; color: var(--text-primary); }
+        .segment-header .chev { transition: transform .18s ease; margin-left: 8px; }
+        .segment-header.open .chev { transform: rotate(90deg); }
+        .segment-body { padding: 12px 14px; display: none; border-top: 1px solid rgba(255,255,255,0.03); background: transparent; }
+        .segment-close-all { margin-left: 8px; padding:6px 10px; font-size:13px; margin-top: 10px;}
+        .segment-header small { color: var(--text-secondary); font-weight:600; margin-left:6px; }
+        .segment-header[aria-expanded="true"] { background: rgba(255,255,255,0.035); }
+        .segment-header:focus { outline: 2px solid rgba(102,126,234,0.25); }
+        /* harmonic active look similar to od-type tabs */
+        .segment-header.open, .segment-header[aria-expanded="true"] {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+            transform: translateY(-2px);
+        }
+        
+        /* buttons inside segmented outputs should have same gradients as download area */
+        .segment-body .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: bold;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .segment-body .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+        .segment-body .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .segment-body .btn-secondary {
+            background: linear-gradient(135deg, #6c757d 0%, #495057 100%);
+            color: white;
+        }
+        .segment-body .btn-success {
+            background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
+            color: white;
+        }
+        .segment-body .btn-info {
+            background: linear-gradient(135deg, #17a2b8 0%, #138496 100%);
+            color: white;
+        }
+        .segment-body .btn-warning {
+            background: linear-gradient(135deg, #ffc107 0%, #ff9800 100%);
+            color: white;
+        }
+    </style>  
 </head>
 <body>
     <header class="header">
@@ -324,6 +440,18 @@
                         </div>
                     </div>
 
+                    <div style="text-align: center; margin-bottom: 12px;">
+                        <label for="segmentInterval" style="color: #fff; font-weight:600; margin-right:8px;">Output segmentation interval (in minutes)</label>
+                        <select id="segmentInterval" style="padding:8px 10px; border-radius:6px; border:1px solid rgba(255,255,255,0.15); min-width:160px; background: var(--bg-primary); color: var(--text-primary);">
+                            <option value="0">No segmentation</option>
+                            <option value="2">Every 2 minutes</option>
+                            <option value="5" selected>Every 5 minutes</option>
+                            <option value="10">Every 10 minutes</option>
+                            <option value="15">Every 15 minutes</option>
+                        </select>
+                        <div style="color:#ddd; font-size:12px; margin-top:6px;">Choose how frequently the results should be divided</div>
+                    </div>
+
                     <div style="text-align: center;">
                         <button class="btn btn-warning" onclick="clearCurrentLine()">
                             Clear Current Line <i class="fas fa-eraser"></i>
@@ -334,7 +462,7 @@
                         <button class="btn btn-info" onclick="nextMode()">
                             Next <i class="fas fa-arrow-right"></i>
                         </button>
-                    </div>
+                    </div> 
                 </div>
 
                 <div class="canvas-container" style="text-align: center;">
@@ -345,6 +473,7 @@
                     <button class="btn btn-success" id="finishDrawingBtn">
                         <i class="fas fa-check"></i> Finish Drawing and Calculate Count
                     </button>
+                    <div style="margin-top:8px; font-size:0.9em; color:#aaa;">🔗 Broken tracks will be automatically stitched before counting.</div>
                 </div>
 
                 <!-- Processing overlay: shown while server calculates results -->
@@ -377,6 +506,82 @@
                             <i class="fas fa-file-excel"></i> Download OD Excel
                         </a>
 
+                        <a href="#" class="btn btn-primary" id="openGenerateReportBtn">
+                            <i class="fas fa-file-export"></i> Generate Report
+                        </a>
+                        <!-- video duration label removed per user request -->
+                    </div>
+
+                    <!-- Generate Report modal -->
+                    <div id="generateReportModal" class="modal-overlay" role="dialog" aria-hidden="true">
+                        <div class="modal-dialog" role="document">
+                            <h3><i class="fas fa-file-export"></i> Generate Report</h3>
+                            <form id="reportForm" onsubmit="return false;">
+                                <input type="hidden" id="report_analysis_id" name="analysis_id">
+
+                                <div style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:12px;">
+                                    <label style="flex:1; min-width:200px;">
+                                        <div style="font-weight:700; margin-bottom:6px; color:var(--text-primary);">Video Recording Start Time</div>
+                                        <input id="reportStartTime" type="datetime-local" style="width:100%; padding:10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:var(--text-primary);">
+                                    </label>
+
+                                    <label style="flex:1; min-width:200px;">
+                                        <div style="font-weight:700; margin-bottom:6px; color:var(--text-primary);">Video Recording End Time</div>
+                                        <input id="reportEndTime" type="datetime-local" style="width:100%; padding:10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:var(--text-primary);">
+                                    </label>
+                                </div>
+                                <!-- duration display -->
+                                <div id="reportDurationInfo" style="font-size:0.9em; color:#ddd; margin-bottom:12px;"></div>
+
+                                <div style="margin-bottom:6px;">
+                                    <div style="font-weight:700; margin-bottom:6px; color:var(--text-primary);">Video Recording Location</div>
+                                    <!-- search box + map container -->
+                                    <div style="margin-bottom:6px; position:relative;">
+                                        <div style="font-weight:700; margin-bottom:6px; color:var(--text-primary);">Search Location</div>
+                                        <input id="reportLocationSearch" type="text" placeholder="Type address or coordinates" style="width:100%; padding:10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:transparent; color:var(--text-primary);">
+                                        <button id="useCurrentLocationBtn" class="btn btn-info" style="position:absolute; right:0; top:0; height:100%; border-radius:0 6px 6px 0; padding:0 12px; font-size:14px;">📍</button>
+                                    </div>
+                                    <div id="reportMap"></div> <!-- styled via CSS above -->
+                                    <input id="reportLocation" type="hidden" placeholder="" >
+
+                                    <!-- display fields for selected location -->
+                                    <div id="locationFields" style="margin-top:12px; display:flex; gap:12px; flex-wrap:wrap;">
+                                        <label style="flex:1;">
+                                            <div style="font-weight:700; color:var(--text-primary);">Location Name</div>
+                                            <input id="reportLocationName" type="text" readonly style="width:100%;padding:10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text-primary);">
+                                        </label>
+                                        <label style="flex:1; min-width:120px;">
+                                            <div style="font-weight:700; color:var(--text-primary);">Latitude</div>
+                                            <input id="reportLat" type="text" readonly style="width:100%;padding:10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text-primary);">
+                                        </label>
+                                        <label style="flex:1; min-width:120px;">
+                                            <div style="font-weight:700; color:var(--text-primary);">Longitude</div>
+                                            <input id="reportLng" type="text" readonly style="width:100%;padding:10px;border-radius:6px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:var(--text-primary);">
+                                        </label>
+                                    </div>
+                                </div>
+                                <div style="margin-bottom:6px;">
+                                    <div style="font-weight:700; margin-bottom:6px; color:var(--text-primary);">Camera Direction</div>
+                                        <select id="reportCameraDir" style="width:100%; padding:10px; border-radius:6px; border:1px solid rgba(255,255,255,0.06); background:var(--bg-primary); color:var(--text-primary);">
+                                            <option value="" disabled selected>Select Direction</option>
+                                            <option value="N">North</option>
+                                            <option value="NE">Northeast</option>
+                                            <option value="E">East</option>
+                                            <option value="SE">Southeast</option>
+                                            <option value="S">South</option>
+                                            <option value="SW">Southwest</option>
+                                            <option value="W">West</option>
+                                            <option value="NW">Northwest</option>
+                                        </select>
+
+                                </div>
+
+                                <div class="modal-actions">
+                                    <button class="btn btn-secondary" id="cancelReportBtn">Cancel</button>
+                                    <button class="btn btn-success" id="downloadReportBtn"><i class="fas fa-download"></i> Download Report</button>
+                                </div>
+                            </form>
+                        </div>
                     </div>
                 </div>
 
@@ -394,7 +599,7 @@
 
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2026 Advanced Vehicle Tracking System - Line Drawing</p>
+            <p>&copy; 2026 TraffiCount Pro - Line Drawing</p>
         </div>
     </footer>
 
@@ -414,6 +619,8 @@
         let legNamesIn = [];
         let legNamesOut = [];
         let analysisId = null;
+        // Segmentation setting (minutes). 0 = no segmentation
+        let segmentIntervalMinutes = 0;
 
         // Step 1: Configure number of legs
         document.getElementById('configLegsBtn').addEventListener('click', () => {
@@ -647,18 +854,29 @@
                 ctx.drawImage(backgroundImage, 0, 0, canvas.width, canvas.height);
             }
             
-            // Draw all completed lines
+            // Draw all completed lines with labels
             for (let i = 0; i < numLegs; i++) {
                 // Draw IN lines
-                allLines.in[i].forEach(line => drawLine(line, 'lime', 3));
+                allLines.in[i].forEach(line => {
+                    drawLine(line, 'lime', 3);
+                    const name = legNamesIn[i] || `Leg ${i+1}-IN`;
+                    drawLabel(line, name);
+                });
                 // Draw OUT lines
-                allLines.out[i].forEach(line => drawLine(line, 'red', 3));
+                allLines.out[i].forEach(line => {
+                    drawLine(line, 'red', 3);
+                    const name = legNamesOut[i] || `Leg ${i+1}-OUT`;
+                    drawLabel(line, name);
+                });
             }
             
-            // Draw current line
+            // Draw current line (user is in the middle of drawing)
             if (currentPoints.length > 0) {
                 const color = currentMode === 'IN' ? 'lime' : 'red';
                 drawLine(currentPoints, color, 3, true);
+                // also show the leg name so the user knows which leg they're editing
+                const name = currentMode === 'IN' ? (legNamesIn[currentLeg] || `Leg ${currentLeg+1}-IN`) : (legNamesOut[currentLeg] || `Leg ${currentLeg+1}-OUT`);
+                drawLabel(currentPoints, name);
             }
         }
 
@@ -685,6 +903,28 @@
                     ctx.fill();
                 });
             }
+        }
+
+        // helper: draw text label near a line
+        function drawLabel(points, text) {
+            if (!points || points.length < 2) return;
+            // position at midpoint between first and last point
+            const p0 = points[0];
+            const p1 = points[points.length - 1];
+            const midx = (p0.x + p1.x) / 2;
+            const midy = (p0.y + p1.y) / 2;
+            
+            ctx.save();
+            ctx.font = 'bold 16px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'bottom';
+            ctx.fillStyle = 'rgba(255,255,255,0.9)';
+            ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+            ctx.lineWidth = 4;
+            // draw outline for readability
+            ctx.strokeText(text, midx, midy - 8);
+            ctx.fillText(text, midx, midy - 8);
+            ctx.restore();
         }
 
         async function adaptLastSavedLine(lineArray, legIndex) {
@@ -817,8 +1057,9 @@
                     canvas_height: canvas.height,
                     image_width: backgroundImage ? backgroundImage.width : canvas.width,
                     image_height: backgroundImage ? backgroundImage.height : canvas.height,
+                    segment_interval_minutes: parseInt(document.getElementById('segmentInterval').value || '0', 10),
                     request_id: window.currentRequestId  // Add request_id if available
-                };
+                }; 
 
                 // Send to server
                 const response = await fetch('/api/line_drawing/calculate', {
@@ -870,38 +1111,54 @@
             document.getElementById('drawingSection').style.display = 'none';
             document.getElementById('resultsSection').style.display = 'block';
             
-            let html = '<div class="results-grid">';
-            
-            // Total counts by vehicle type
-            if (results.totals) {
+            let html = '';
+
+            // Totals by vehicle type (table)
+            if (results.totals && results.totals.length) {
+                html += '<h3><i class="fas fa-car"></i> Totals by vehicle type</h3>';
+                html += '<table style="width:100%; border-collapse: collapse; margin-top:8px;">';
+                html += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">Vehicle Type</th><th style="text-align:right; padding:8px; border-bottom:1px solid var(--border-color);">Count</th></tr></thead>';
+                html += '<tbody>';
                 results.totals.forEach(item => {
-                    html += `
-                        <div class="result-card">
-                            <h3><i class="fas fa-car"></i> ${item.vehicle_type}</h3>
-                            <h2 style="color: #667eea; margin: 10px 0;">${item.count}</h2>
-                            <p>Vehicle</p>
-                        </div>
-                    `;
+                    html += `<tr><td style="padding:8px;">${item.vehicle_type}</td><td style="padding:8px; text-align:right; font-weight:700; color:#667eea">${item.count}</td></tr>`;
                 });
+                html += '</tbody></table>';
             }
+
+
             
-            html += '</div>';
-            
-            // OD Matrix summary
+            // OD Matrix summary (full IN × OUT table)
             if (results.od_summary) {
-                html += '<h3 style="margin-top: 30px;"><i class="fas fa-table"></i> OD Matrix Summary</h3>';
-                html += '<div class="results-grid">';
-                
-                for (const [pair, count] of Object.entries(results.od_summary)) {
-                    html += `
-                        <div class="result-card">
-                            <h4>${pair}</h4>
-                            <h2 style="color: #667eea;">${count}</h2>
-                        </div>
-                    `;
-                }
-                
-                html += '</div>';
+                html += '<h3 style="margin-top: 18px;">OD Matrix Summary</h3>';
+
+                // determine IN/OUT names (prefer client-side legNames, fallback to keys)
+                const odKeys = Object.keys(results.od_summary || {});
+                const inferredIn = Array.from(new Set(odKeys.map(k => (k.split(' → ')[0]))));
+                const inferredOut = Array.from(new Set(odKeys.map(k => (k.split(' → ')[1]))));
+
+                const inList = (Array.isArray(legNamesIn) && legNamesIn.length) ? legNamesIn : inferredIn;
+                const outList = (Array.isArray(legNamesOut) && legNamesOut.length) ? legNamesOut : inferredOut;
+
+                // build lookup for quick access
+                const odLookup = {};
+                for (const [pair, count] of Object.entries(results.od_summary)) odLookup[pair] = count;
+
+                // render table
+                html += '<div style="overflow:auto; margin-top:8px;"><table style="width:100%; border-collapse: collapse;">';
+                html += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">IN → OUT</th>';
+                outList.forEach(o => html += `<th style="padding:8px; text-align:center; border-bottom:1px solid var(--border-color);">${o}</th>`);
+                html += '</tr></thead><tbody>';
+
+                inList.forEach(inN => {
+                    html += `<tr><td style="padding:8px; font-weight:600; border-bottom:1px solid var(--border-color);">${inN}</td>`;
+                    outList.forEach(outN => {
+                        const v = odLookup[`${inN} → ${outN}`] || 0;
+                        html += `<td style="padding:8px; text-align:center; border-bottom:1px solid var(--border-color);">${v}</td>`;
+                    });
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table></div>';
             }
 
             // If this session is tied to a request_id, give user an explicit Continue button
@@ -915,7 +1172,162 @@
             //     `;
             // }
             
-            document.getElementById('crossingResults').innerHTML = html;
+            // render main crossing results
+                document.getElementById('crossingResults').innerHTML = html;
+
+                // remove any previous segmented-results block
+                const prevSeg = document.getElementById('segmentedResults');
+                if (prevSeg) prevSeg.remove();
+
+                // Render segmented outputs (insert AFTER `#crossingResults`) if server returned segments
+                try {
+                    if (results.segments && results.segments.length) {
+                        let segHtml = '<div style="margin-top:18px;">';
+                        segHtml += '<h3><i class="fas fa-clock"></i> Segmented Outputs</h3>';
+
+                        results.segments.forEach((seg, idx) => {
+                            const startMin = Math.floor(seg.start_sec / 60);
+                            const endMin = Math.ceil(seg.end_sec / 60);
+
+                            segHtml += `<div class="result-card" style="margin-top:12px;">`;
+                            segHtml += `<h4>From ${startMin} to ${endMin} minutes</h4>`;
+
+                            // Totals table for this segment (categories)
+                            if (seg.totals && seg.totals.length) {
+                                segHtml += '<h5 style="margin-top:8px;">Totals by vehicle type</h5>';
+                                segHtml += '<table style="width:100%; border-collapse:collapse; margin-top:8px;">';
+                                segHtml += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">Vehicle Type</th><th style="text-align:right; padding:8px; border-bottom:1px solid var(--border-color);">Count</th></tr></thead>';
+                                segHtml += '<tbody>';
+                                seg.totals.forEach(item => {
+                                    segHtml += `<tr><td style="padding:8px;">${item.vehicle_type}</td><td style="padding:8px; text-align:right; font-weight:700; color:#667eea">${item.count}</td></tr>`;
+                                });
+                                segHtml += '</tbody></table>';
+                            } else {
+                                segHtml += '<p style="color:#ccc; margin-top:8px;">No vehicles detected in this interval</p>';
+                            }
+
+                            // Full OD matrix (IN × OUT) for this segment
+                            if (seg.od_matrix_rows && seg.od_matrix_rows.length) {
+                                segHtml += '<h5 style="margin-top:14px;">OD Matrix (IN → OUT)</h5>';
+
+                                // Build pivot table header
+                                const inNamesList = (Array.isArray(legNamesIn) && legNamesIn.length) ? legNamesIn : Array.from(new Set(seg.od_matrix_rows.map(r => r.in_name)));
+                                const outNamesList = (Array.isArray(legNamesOut) && legNamesOut.length) ? legNamesOut : Array.from(new Set(seg.od_matrix_rows.map(r => r.out_name)));
+
+                                segHtml += '<div style="overflow:auto; margin-top:8px;"><table style="width:100%; border-collapse: collapse;">';
+                                segHtml += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">IN → OUT</th>';
+                                outNamesList.forEach(o => { segHtml += `<th style="padding:8px; text-align:center; border-bottom:1px solid var(--border-color);">${o}</th>`; });
+                                segHtml += '</tr></thead><tbody>';
+
+                                // Create quick lookup from od_matrix_rows
+                                const lookup = {};
+                                seg.od_matrix_rows.forEach(r => {
+                                    lookup[`${r.in_name}||${r.out_name}`] = r.total || 0;
+                                });
+
+                                inNamesList.forEach(inN => {
+                                    segHtml += `<tr><td style="padding:8px; font-weight:600; border-bottom:1px solid var(--border-color);">${inN}</td>`;
+                                    outNamesList.forEach(outN => {
+                                        const v = lookup[`${inN}||${outN}`] || 0;
+                                        segHtml += `<td style="padding:8px; text-align:center; border-bottom:1px solid var(--border-color);">${v}</td>`;
+                                    });
+                                    segHtml += '</tr>';
+                                });
+
+                                segHtml += '</tbody></table></div>';
+
+                            } else {
+                                // still show empty matrix (zeros)
+                                segHtml += '<h5 style="margin-top:14px;">OD Matrix (IN → OUT)</h5>';
+                                segHtml += '<p style="color:#ccc; margin-top:8px;">No OD pairs for this interval</p>';
+                            }
+
+                            // optional per-segment vehicle-type tables (toggle)
+                            if (seg.files && seg.files.od_matrix_by_type) {
+                                const odByUrl = seg.files.od_matrix_by_type;
+                                segHtml += `<div style="margin-top:8px;"><button class=\"btn btn-info\" onclick=\"loadSegOdByType(this, '${odByUrl}', ${idx})\">Show vehicle-type tables</button></div>`;
+                                segHtml += `<div id=\"odByTypeSegment_${idx}\" style=\"margin-top:10px;\"></div>`;
+                            }
+
+                            // per-segment download buttons (OD CSV / OD Excel / crossed CSV)
+                            segHtml += '<div style="margin-top:12px; display:flex; gap:8px; flex-wrap:wrap;">';
+                            if (seg.files && seg.files.od_matrix) {
+                                segHtml += `<a class="btn btn-secondary" href="/api/download/${seg.files.od_matrix}">Download OD CSV (${startMin}–${endMin} min)</a>`;
+                            }
+                            if (seg.files && seg.files.od_excel) {
+                                segHtml += `<a class="btn btn-warning" href="/api/download/${seg.files.od_excel}">Download OD Excel (${startMin}–${endMin} min)</a>`;
+                            }
+                            if (seg.files && seg.files.crossed) {
+                                segHtml += `<a class="btn btn-info" href="/api/download/${seg.files.crossed}">Download Crossed CSV (${startMin}–${endMin} min)</a>`;
+                            }
+                            segHtml += '</div>';
+
+                            segHtml += '</div>';
+                        });
+
+                        segHtml += '</div>';
+
+                        const wrapper = document.createElement('div');
+                        wrapper.id = 'segmentedResults';
+                        wrapper.innerHTML = segHtml;
+                        document.getElementById('crossingResults').insertAdjacentElement('afterend', wrapper);
+
+                        // Post-process segmented results into an accordion (headers-only view)
+                        (function(){
+                            const segContainer = document.getElementById('segmentedResults');
+                            if (!segContainer) return;
+
+                            // add Close all button at top if missing
+                            if (!segContainer.querySelector('#segCloseAll')) {
+                                const btn = document.createElement('button');
+                                btn.id = 'segCloseAll';
+                                btn.className = 'btn btn-secondary segment-close-all';
+                                btn.textContent = 'Close all';
+                                segContainer.insertBefore(btn, segContainer.firstChild.nextSibling);
+                            }
+
+                            const cards = Array.from(segContainer.querySelectorAll('.result-card'));
+                            cards.forEach((card, i) => {
+                                const hdr = card.querySelector('h4');
+                                const title = hdr ? hdr.textContent.trim() : `Segment ${i+1}`;
+
+                                // collect inner HTML except header
+                                const children = Array.from(card.children).filter(c => c !== hdr);
+                                const bodyHtml = children.map(c => c.outerHTML).join('');
+
+                                card.innerHTML = `\n                                    <button class="segment-header" data-idx="${i}" aria-expanded="false">${title} <span class="chev">▸</span></button>\n                                    <div class="segment-body" id="segmentBody_${i}" style="display:none;">${bodyHtml}</div>\n                                `;
+                            });
+
+                            // accordion behavior (single-open)
+                            segContainer.querySelectorAll('.segment-header').forEach(h => {
+                                h.addEventListener('click', () => {
+                                    const idx = h.dataset.idx;
+                                    const isOpen = h.getAttribute('aria-expanded') === 'true';
+
+                                    segContainer.querySelectorAll('.segment-header').forEach(x => { x.setAttribute('aria-expanded','false'); x.classList.remove('open'); });
+                                    segContainer.querySelectorAll('.segment-body').forEach(b => b.style.display = 'none');
+
+                                    if (!isOpen) {
+                                        h.setAttribute('aria-expanded','true');
+                                        h.classList.add('open');
+                                        const body = document.getElementById('segmentBody_' + idx);
+                                        if (body) body.style.display = 'block';
+                                    }
+                                });
+                            });
+
+                            const closeAll = document.getElementById('segCloseAll');
+                            if (closeAll) {
+                                closeAll.addEventListener('click', () => {
+                                    segContainer.querySelectorAll('.segment-header').forEach(x => x.setAttribute('aria-expanded','false'));
+                                    segContainer.querySelectorAll('.segment-body').forEach(b => b.style.display = 'none');
+                                });
+                            }
+                        })();
+                    }
+                } catch (err) {
+                    console.warn('Could not render segmented results (accordion):', err);
+                }
             
             // Set download links
             if (files) {
@@ -939,6 +1351,7 @@
                         .catch(err => console.warn('Could not load od_matrix_by_type:', err));
                 }
 
+                
                 // Attach continue button handler if present (guarded)
                 const contBtn = document.getElementById('continueToAnalysisBtn');
                 if (contBtn) {
@@ -962,19 +1375,32 @@
         // 1) LONG format: columns (in_name,out_name,vehicle_type,count)
         // 2) WIDE format: columns (in_name,out_name,<vehicle types...>,total)
         function renderOdByTypeTabs(csvText) {
+            // Reuse the `renderOdByTypeTabsInto` renderer but render into
+            // the page-level container `odByTypeContainer` (create if missing).
+            const container = document.getElementById('odByTypeContainer') || document.createElement('div');
+            container.id = 'odByTypeContainer';
+            renderOdByTypeTabsInto(container, csvText);
+
+            // ensure container is attached under the main results area
+            if (!document.getElementById('odByTypeContainer')) {
+                const holder = document.getElementById('crossingResults');
+                if (holder) holder.appendChild(container);
+            }
+        }
+
+        // Render OD-by-type into a specific container element (used for per-segment views)
+        function renderOdByTypeTabsInto(containerEl, csvText) {
+            if (!containerEl) return;
             const lines = csvText.trim().split(/\r?\n/).filter(Boolean);
             if (!lines.length) return;
             const headers = lines[0].split(',').map(h => h.trim());
-
             const rows = lines.slice(1).map(r => r.split(',').map(c => c.trim()));
-
-            // Detect LONG format (has vehicle_type & count columns)
             const hasVehicleType = headers.includes('vehicle_type') && headers.includes('count');
 
             let inNames = [];
             let outNames = [];
             let vehicleTypes = new Set();
-            const matrix = {}; // matrix[type][in_name][out_name] = count
+            const matrix = {};
 
             if (hasVehicleType) {
                 const idx_in = headers.indexOf('in_name');
@@ -988,17 +1414,15 @@
                     const vt = cols[idx_vt];
                     const cnt = parseInt(cols[idx_count] || '0', 10) || 0;
 
-                    inNames.includes(in_name) || inNames.push(in_name);
-                    outNames.includes(out_name) || outNames.push(out_name);
+                    if (!inNames.includes(in_name)) inNames.push(in_name);
+                    if (!outNames.includes(out_name)) outNames.push(out_name);
                     vehicleTypes.add(vt);
 
                     matrix[vt] = matrix[vt] || {};
                     matrix[vt][in_name] = matrix[vt][in_name] || {};
                     matrix[vt][in_name][out_name] = cnt;
                 });
-
             } else {
-                // Fallback: WIDE format where vehicle types are columns between out_name and total
                 const idx_out = headers.indexOf('out_name');
                 const idx_total = headers.indexOf('total');
                 const typeCols = (idx_out >=0 && idx_total > idx_out) ? headers.slice(idx_out + 1, idx_total) : [];
@@ -1006,8 +1430,8 @@
                 rows.forEach(cols => {
                     const in_name = cols[headers.indexOf('in_name')];
                     const out_name = cols[headers.indexOf('out_name')];
-                    inNames.includes(in_name) || inNames.push(in_name);
-                    outNames.includes(out_name) || outNames.push(out_name);
+                    if (!inNames.includes(in_name)) inNames.push(in_name);
+                    if (!outNames.includes(out_name)) outNames.push(out_name);
 
                     typeCols.forEach((vt, i) => {
                         const val = parseInt(cols[idx_out + 1 + i] || '0', 10) || 0;
@@ -1022,17 +1446,18 @@
             vehicleTypes = Array.from(vehicleTypes).sort();
             if (vehicleTypes.length === 0) return;
 
-            // Build HTML tabs + tables
             let tabHtml = '<div style="margin-top:18px;">';
             tabHtml += '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;">';
             vehicleTypes.forEach((vt, idx) => {
-                tabHtml += `<button class=\"btn btn-secondary od-type-tab\" data-type=\"${vt}\">${vt}</button>`;
+                const isFirst = idx === 0;
+                const activeClass = isFirst ? ' active' : '';
+                const btnClass = isFirst ? 'btn btn-primary' : 'btn btn-secondary';
+                tabHtml += `<button class=\"${btnClass} od-type-tab${activeClass}\" data-type=\"${vt}\">${vt}</button>`;
             });
             tabHtml += '</div>';
 
             tabHtml += '<div id="odTypeTables">';
             vehicleTypes.forEach((vt, idx) => {
-                // Build pivot table for this vehicle type
                 let tbl = '<table style="width:100%; border-collapse: collapse; margin-bottom: 18px;">';
                 tbl += '<thead><tr><th style="text-align:left; padding:8px; border-bottom:1px solid var(--border-color);">IN → OUT</th>';
                 outNames.forEach(o => tbl += `<th style=\"padding:8px; text-align:center; border-bottom:1px solid var(--border-color);\">${o}</th>`);
@@ -1053,28 +1478,48 @@
             });
 
             tabHtml += '</div></div>';
-
-            const container = document.getElementById('crossingResults');
-            const holder = document.getElementById('odByTypeContainer');
-            if (holder) holder.innerHTML = tabHtml;
-            else {
-                // append under crossingResults if placeholder missing
-                const div = document.createElement('div');
-                div.id = 'odByTypeContainer';
-                div.innerHTML = tabHtml;
-                container.appendChild(div);
-            }
+            containerEl.innerHTML = tabHtml;
 
             // Tab click handlers
-            document.querySelectorAll('.od-type-tab').forEach(btn => {
+            containerEl.querySelectorAll('.od-type-tab').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const t = btn.dataset.type;
-                    document.querySelectorAll('.od-type-tab').forEach(b => b.classList.remove('active'));
+                    containerEl.querySelectorAll('.od-type-tab').forEach(b => {
+                        b.classList.remove('active');
+                        // revert style
+                        b.classList.remove('btn-primary');
+                        b.classList.add('btn-secondary');
+                    });
                     btn.classList.add('active');
-                    document.querySelectorAll('.od-type-table').forEach(div => {
+                    // highlight selected
+                    btn.classList.remove('btn-secondary');
+                    btn.classList.add('btn-primary');
+                    containerEl.querySelectorAll('.od-type-table').forEach(div => {
                         div.style.display = div.dataset.type === t ? 'block' : 'none';
                     });
                 });
+            });
+        }
+
+        // Load segment OD-by-type CSV and render into the provided segment container
+        function loadSegOdByType(btn, url, idx) {
+            const holderId = `odByTypeSegment_${idx}`;
+            const holder = document.getElementById(holderId);
+            if (!url || !holder) return;
+            // toggle: if already filled, remove it
+            if (holder.innerHTML && holder.innerHTML.trim().length) {
+                holder.innerHTML = '';
+                btn.textContent = 'Show vehicle-type tables';
+                return;
+            }
+
+            btn.textContent = 'Loading...';
+            fetch(`/api/download/${url}`).then(r => r.text()).then(csvText => {
+                renderOdByTypeTabsInto(holder, csvText);
+                btn.textContent = 'Hide vehicle-type tables';
+            }).catch(err => {
+                console.warn('Could not load segment od-by-type:', err);
+                btn.textContent = 'Show vehicle-type tables';
             });
         }
 
@@ -1095,6 +1540,401 @@
             console.log('Opening speed calculation:', url);
             window.location.href = url;
         }
+
+        // --- Generate Report (modal + PDF download) ---
+        // duration is provided via video metadata from the frontend; do not compute it from timestamps
+        // this function remains for compatibility but is intentionally a no-op
+        function updateReportDuration() {
+            // no calculation performed - metadata label already reflects duration
+        }
+
+        async function openReportModal() {
+            // require an analysis or request id
+            if (!analysisId && !window.currentRequestId) {
+                alert('No analysis available to generate a report. Please run the calculation first.');
+                return;
+            }
+            document.getElementById('report_analysis_id').value = analysisId || '';
+
+            // clear previous values so user starts fresh
+            document.getElementById('reportStartTime').value = '';
+            document.getElementById('reportEndTime').value = '';
+            document.getElementById('reportDurationInfo').textContent = '';
+
+            // try to prefill location if leg names exist (only hidden input)
+            if (legNamesIn && legNamesIn.length) {
+                const loc = (legNamesIn[0] || '').replace(/-IN$/, '');
+                if (!document.getElementById('reportLocation').value) document.getElementById('reportLocation').value = loc;
+            }
+
+            // fetch inferred metadata (duration only)
+            try {
+                let url = '/api/report/metadata?';
+                if (window.currentRequestId) {
+                    url += 'request_id=' + encodeURIComponent(window.currentRequestId);
+                } else if (analysisId) {
+                    url += 'analysis_id=' + encodeURIComponent(analysisId);
+                }
+                const resp = await fetch(url);
+                if (resp.ok) {
+                    const meta = await resp.json();
+                    if (meta.duration) {
+                        if (!window.uploadedVideoDuration) {
+                            document.getElementById('reportDurationInfo').textContent = 'Duration: ' + meta.duration;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.warn('Failed to load report metadata:', err);
+            }
+
+            // show modal
+            const modal = document.getElementById('generateReportModal');
+            modal.style.display = 'flex';
+            modal.setAttribute('aria-hidden', 'false');
+
+            // ensure map is ready; after map is created we'll position marker/center
+            // we use a callback that initReportMap will invoke when ready
+            window._reportMapReadyCallback = function() {
+                // if lat/lng already present, show marker there
+                const latVal = document.getElementById('reportLat').value;
+                const lngVal = document.getElementById('reportLng').value;
+                if (latVal && lngVal) {
+                    const loc = new google.maps.LatLng(parseFloat(latVal), parseFloat(lngVal));
+                    const nm = document.getElementById('reportLocationName').value || '';
+                    placeReportMarker(loc, nm);
+                } else {
+                    // no saved location, try to centre on user country / geolocation
+                    if (navigator.geolocation) {
+                        navigator.geolocation.getCurrentPosition(function(p) {
+                            if (window.reportMap) {
+                                window.reportMap.setCenter({lat:p.coords.latitude, lng:p.coords.longitude});
+                                window.reportMap.setZoom(5);
+                            }
+                        }, function() {
+                            if (window.reportMap) {
+                                window.reportMap.setCenter({lat:0,lng:0});
+                                window.reportMap.setZoom(2);
+                            }
+                        });
+                    } else if (window.reportMap) {
+                        window.reportMap.setCenter({lat:0,lng:0});
+                        window.reportMap.setZoom(2);
+                    }
+                }
+            };
+            ensureMapInit();
+
+            // update duration info in case values already filled
+            updateReportDuration();
+        }
+
+        function closeReportModal() {
+            const modal = document.getElementById('generateReportModal');
+            modal.style.display = 'none';
+            modal.setAttribute('aria-hidden', 'true');
+        }
+
+        document.getElementById('openGenerateReportBtn').addEventListener('click', (e) => {
+            e.preventDefault();
+            const btn = document.getElementById('openGenerateReportBtn');
+            // show loading spinner in button
+            btn.disabled = true;
+            btn.dataset.orig = btn.innerHTML;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            openReportModal().finally(() => {
+                // restore button appearance after modal open
+                btn.disabled = false;
+                if (btn.dataset.orig) {
+                    btn.innerHTML = btn.dataset.orig;
+                    delete btn.dataset.orig;
+                }
+            });
+        });
+        // when modal is opened we may need to initialize the map if not yet created
+        function ensureMapInit() {
+            // if Google library not loaded, inject script first
+            if (typeof window.google === 'undefined' || typeof window.google.maps === 'undefined') {
+                if (!window._gmapsInjecting) {
+                    window._gmapsInjecting = true;
+                    const script = document.createElement('script');
+                    // include places library for autocomplete
+                    script.src = 'https://maps.googleapis.com/maps/api/js?key=AIzaSyBtpz1PYwlJoXX_OC4Mpi9-h4mDzyPZGvM&libraries=places';
+                    script.async = true;
+                    script.defer = true;
+                    script.setAttribute('loading','async');
+                    script.onload = function() {
+                        window._gmapsInjecting = false;
+                        if (typeof window.initReportMap === 'function') window.initReportMap();
+                    };
+                    script.onerror = function() {
+                        window._gmapsInjecting = false;
+                        console.error('Google Maps script failed to load');
+                    };
+                    document.head.appendChild(script);
+                }
+                return;
+            }
+            if (typeof window.reportMap === 'undefined' && typeof window.initReportMap === 'function') {
+                window.initReportMap();
+            }
+        }
+        document.getElementById('cancelReportBtn').addEventListener('click', (e) => { e.preventDefault(); closeReportModal(); });
+        document.getElementById('generateReportModal').addEventListener('click', (ev) => {
+            if (ev.target === document.getElementById('generateReportModal')) closeReportModal();
+        });
+        // update duration when times change
+        // ensure datetime fields empty by default (they are no default value)
+        document.getElementById('reportStartTime').value = '';
+        document.getElementById('reportEndTime').value = '';
+        document.getElementById('reportStartTime').addEventListener('change', updateReportDuration);
+        document.getElementById('reportEndTime').addEventListener('change', updateReportDuration);
+        // camera direction is required
+        
+        // --- helper for updating visible location fields and hidden inputs ---
+        function updateLocationInputs(latlng, name) {
+            const lat = latlng.lat().toFixed(6);
+            const lng = latlng.lng().toFixed(6);
+            const nameField = document.getElementById('reportLocationName');
+            const latField = document.getElementById('reportLat');
+            const lngField = document.getElementById('reportLng');
+            const hidden = document.getElementById('reportLocation');
+
+            if (name !== undefined && name !== null) {
+                nameField.value = name;
+            }
+            latField.value = lat;
+            lngField.value = lng;
+            if (hidden) {
+                hidden.value = lat + ',' + lng;
+            }
+        }
+
+        // location autocomplete – will be initialised after map loads
+        function initAutocomplete() {
+            const input = document.getElementById('reportLocationSearch');
+            if (!input || !google.maps.places) return;
+            try {
+                const options = {
+                    fields: ['name', 'formatted_address', 'geometry']
+                };
+                const autocomplete = new google.maps.places.Autocomplete(input, options);
+                autocomplete.addListener('place_changed', function() {
+                    const place = autocomplete.getPlace();
+                    if (place.geometry && place.geometry.location) {
+                        const loc = place.geometry.location;
+                        const desc = place.name || place.formatted_address || '';
+                        placeReportMarker(loc, desc);
+                        input.value = place.formatted_address || place.name || '';
+                    } else {
+                        alert('Location not found');
+                    }
+                });
+            } catch (e) {
+                console.warn('Autocomplete init failed:', e);
+            }
+        }
+
+        // add current-location button handler once DOM exists
+        document.getElementById('useCurrentLocationBtn').addEventListener('click', function(e) {
+            e.preventDefault();
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(pos) {
+                    const loc = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+                    placeReportMarker(loc, 'Current location');
+                }, function(err) {
+                    alert('Could not get current location: ' + err.message);
+                });
+            } else {
+                alert('Geolocation not supported by your browser');
+            }
+        });
+
+        // add map initialization callback (loaded via external script)
+        window.initReportMap = function() {
+            const defaultCenter = { lat: 0, lng: 0 };
+            window.reportMap = new google.maps.Map(document.getElementById('reportMap'), {
+                center: defaultCenter,
+                zoom: 2
+            });
+            window.reportMarker = null;
+            window.reportMap.addListener('click', function(e) {
+                placeReportMarker(e.latLng);
+            });
+            // attach autocomplete once map is ready
+            initAutocomplete();
+            // notify any waiting callback (openReportModal sets this)
+            if (typeof window._reportMapReadyCallback === 'function') {
+                window._reportMapReadyCallback();
+                // clear to avoid duplicate calls
+                window._reportMapReadyCallback = null;
+            }
+        };
+
+        function placeReportMarker(location, placeName) {
+            // animate pan & zoom
+            if (window.reportMap) {
+                window.reportMap.panTo(location);
+                // only increase zoom if we aren't already close
+                try {
+                    const current = window.reportMap.getZoom();
+                    if (current < 17) {
+                        window.reportMap.setZoom(18);
+                    }
+                } catch (e) {
+                    window.reportMap.setZoom(18);
+                }
+            }
+
+            // create or move marker
+            if (window.reportMarker) {
+                window.reportMarker.setPosition(location);
+                if (window.reportMarker.setAnimation) {
+                    window.reportMarker.setAnimation(google.maps.Animation.DROP);
+                }
+            } else {
+                const opts = {
+                    position: location,
+                    map: window.reportMap,
+                    draggable: true,
+                    animation: google.maps.Animation.DROP
+                };
+                if (google.maps.marker && google.maps.marker.AdvancedMarkerElement) {
+                    // primary path: use AdvancedMarkerElement
+                    window.reportMarker = new google.maps.marker.AdvancedMarkerElement(opts);
+                    try {
+                        window.reportMarker.setDraggable && window.reportMarker.setDraggable(true);
+                    } catch {};
+                } else {
+                    // if advanced element missing (unlikely), fall back but warn
+                    console.warn('AdvancedMarkerElement not available; using deprecated google.maps.Marker');
+                    window.reportMarker = new google.maps.Marker(opts);
+                }
+                // attach drag handler helper
+                function attachDragUpdate(m) {
+                    if (!m) return;
+                    // avoid attaching twice
+                    if (m._dragHandlerAdded) return;
+                    m._dragHandlerAdded = true;
+                    // different APIs: some markers emit dragend without event arg
+                    if (m.addListener) {
+                        m.addListener('dragend', function(e) {
+                            let pos;
+                            if (typeof m.getPosition === 'function') {
+                                pos = m.getPosition();
+                            } else if (e && e.latLng) {
+                                pos = e.latLng;
+                            }
+                            if (pos) {
+                                // update lat/lng immediately
+                                updateLocationInputs(pos, document.getElementById('reportLocationName').value || '');
+                                // perform reverse geocode to update name
+                                if (!window._geocoder) window._geocoder = new google.maps.Geocoder();
+                                window._geocoder.geocode({ location: pos }, function(results) {
+                                    const best = (results && results[0] && (results[0].formatted_address || results[0].name)) || '';
+                                    updateLocationInputs(pos, best);
+                                });
+                            }
+                        });
+                    } else if (google && google.maps && google.maps.event) {
+                        google.maps.event.addListener(m, 'dragend', function(e) {
+                            let pos = m.getPosition && m.getPosition();
+                            if (!pos && e && e.latLng) pos = e.latLng;
+                            if (pos) {
+                                updateLocationInputs(pos, document.getElementById('reportLocationName').value || '');
+                                if (!window._geocoder) window._geocoder = new google.maps.Geocoder();
+                                window._geocoder.geocode({ location: pos }, function(results) {
+                                    const best = (results && results[0] && (results[0].formatted_address || results[0].name)) || '';
+                                    updateLocationInputs(pos, best);
+                                });
+                            }
+                        });
+                    }
+                }
+                attachDragUpdate(window.reportMarker);
+            }
+
+            // update hidden/visible inputs
+            if (location && location.lat && location.lng) {
+                updateLocationInputs(location, placeName || '');
+            }
+        }
+
+        document.getElementById('downloadReportBtn').addEventListener('click', async (ev) => {
+            ev.preventDefault();
+            const btn = document.getElementById('downloadReportBtn');
+            btn.disabled = true;
+
+            try {
+                // enforce required input fields
+                const startVal = document.getElementById('reportStartTime').value;
+                const endVal = document.getElementById('reportEndTime').value;
+                const locVal = document.getElementById('reportLocation').value;
+                const dirVal = document.getElementById('reportCameraDir').value;
+                if (!startVal || !endVal || !locVal || !dirVal) {
+                    alert('Please enter start time, end time, select a location on the map and specify camera direction.');
+                    btn.disabled = false;
+                    return;
+                }
+
+                // format location for report string
+                const nameStr = document.getElementById('reportLocationName').value || '';
+                let locString = locVal.trim();
+                if (nameStr) locString = `${nameStr} (${locString})`;
+
+                const payload = {
+                    analysis_id: analysisId,
+                    request_id: window.currentRequestId,
+                    start_time: startVal || null,
+                    end_time: endVal || null,
+                    location: locString,
+                    location_name: nameStr || null,
+                    camera_direction: dirVal,
+                    // video metadata supplied by frontend (if available)
+                    filename: window.uploadedVideoFilename || null,
+                    file_size: window.uploadedVideoSize || null,
+                    video_duration: window.uploadedVideoDuration || null
+                };
+
+                if (!payload.analysis_id && !payload.request_id) {
+                    alert('No analysis available to generate a report.');
+                    btn.disabled = false;
+                    return;
+                }
+
+                const resp = await fetch('/api/report/generate', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+
+                if (!resp.ok) {
+                    const txt = await resp.text();
+                    alert('Report generation failed: ' + txt);
+                    btn.disabled = false;
+                    return;
+                }
+
+                const blob = await resp.blob();
+                const safeName = (payload.location || analysisId || 'report').replace(/[^a-z0-9\-_]/ig, '_');
+                const filename = `traffic_report_${safeName}.pdf`;
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+
+                closeReportModal();
+            } catch (err) {
+                console.error('Report download failed:', err);
+                alert('Error generating report: ' + (err.message || err));
+            } finally {
+                btn.disabled = false;
+            }
+        });
         
         // Auto-load request data if request_id is provided
         {% if request_id %}
@@ -1123,7 +1963,22 @@
                 }
                 
                 console.log('✅ Request data received:', data);
-                
+
+                // prefill timing metadata if available
+                if (data.start_time) {
+                    document.getElementById('reportStartTime').value = data.start_time;
+                }
+                if (data.end_time) {
+                    document.getElementById('reportEndTime').value = data.end_time;
+                }
+                if (data.duration) {
+                    document.getElementById('reportDurationInfo').textContent = 'Duration: ' + data.duration;
+                    const lbl = document.getElementById('videoDurationLabel');
+                    if (lbl) lbl.textContent = 'Video duration: ' + data.duration;
+                }
+                // ensure JS-derived duration text is also updated
+                updateReportDuration();
+
                 // Store CSV path for later use (will be used during calculation)
                 const csvPath = data.csv_path;
                 if (csvPath) {
